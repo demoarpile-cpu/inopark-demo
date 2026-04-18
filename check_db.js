@@ -1,32 +1,18 @@
-require('dotenv').config();
-const mysql = require('mysql2/promise');
+const pool = require('./config/db');
 
-const check = async () => {
-    let connection;
-    try {
-        connection = await mysql.createConnection({
-            host: process.env.DB_HOST || 'localhost',
-            user: process.env.DB_USER || 'root',
-            password: process.env.DB_PASS || '',
-            database: process.env.DB_NAME || 'crm_db',
-            port: parseInt(process.env.DB_PORT) || 3306
-        });
+async function checkRoles() {
+  try {
+    const [roles] = await pool.execute('SELECT * FROM roles');
+    console.log('Roles:', JSON.stringify(roles, null, 2));
+    
+    const [moduleSettingsCols] = await pool.execute('SHOW COLUMNS FROM module_settings');
+    console.log('module_settings columns:', JSON.stringify(moduleSettingsCols.map(c => c.Field), null, 2));
 
-        const [rows] = await connection.execute(`
-            SELECT COLUMN_NAME, IS_NULLABLE, COLUMN_TYPE
-            FROM INFORMATION_SCHEMA.COLUMNS
-            WHERE TABLE_SCHEMA = '${process.env.DB_NAME || 'crm_db'}'
-            AND TABLE_NAME = 'finance_templates'
-            AND COLUMN_NAME = 'company_id'
-        `);
+    process.exit(0);
+  } catch (err) {
+    console.error('Error:', err);
+    process.exit(1);
+  }
+}
 
-        console.log('COLUMN INFO:', rows);
-
-    } catch (error) {
-        console.error('ERROR:', error);
-    } finally {
-        if (connection) await connection.end();
-    }
-};
-
-check();
+checkRoles();

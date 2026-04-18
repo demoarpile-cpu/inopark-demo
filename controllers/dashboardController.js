@@ -28,7 +28,6 @@ const getSuperAdminDashboard = async (req, res) => {
     const [
       totalCompanies,
       totalUsers,
-      totalClients,
       totalProjects,
       totalInvoices,
       totalRevenue,
@@ -37,7 +36,6 @@ const getSuperAdminDashboard = async (req, res) => {
     ] = await Promise.all([
       safeQuery(`SELECT COUNT(*) as total FROM companies WHERE is_deleted = 0`, []),
       safeQuery(`SELECT COUNT(*) as total FROM users WHERE is_deleted = 0`, []),
-      safeQuery(`SELECT COUNT(*) as total FROM clients WHERE is_deleted = 0`, []),
       safeQuery(`SELECT COUNT(*) as total FROM projects WHERE is_deleted = 0`, []),
       safeQuery(`SELECT COUNT(*) as total FROM invoices WHERE is_deleted = 0`, []),
       safeQuery(`SELECT COALESCE(SUM(paid), 0) as total FROM invoices WHERE is_deleted = 0`, []),
@@ -83,7 +81,6 @@ const getSuperAdminDashboard = async (req, res) => {
         overview: {
           totalCompanies: totalCompanies[0]?.total || 0,
           totalUsers: totalUsers[0]?.total || 0,
-          totalClients: totalClients[0]?.total || 0,
           totalProjects: totalProjects[0]?.total || 0,
           totalInvoices: totalInvoices[0]?.total || 0,
           totalRevenue: parseFloat(totalRevenue[0]?.total || 0),
@@ -130,240 +127,231 @@ const getCompleteDashboard = async (req, res) => {
     const lastYear = currentYear - 1;
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
-    // ===== 1. SUMMARY DATA =====
-    // Get clock data for the user from attendance table
-    const [clockInData] = await safeQuery(
-      `SELECT check_in, check_out,
-              TIMEDIFF(COALESCE(check_out, CURTIME()), check_in) as duration
-       FROM attendance
-       WHERE user_id = ? AND date = ? AND company_id = ?
-       ORDER BY check_in DESC LIMIT 1`,
-      [userId, today, companyId],
-      []
-    );
+    // ===== RUN ALL QUERIES CONCURRENTLY =====
+    const [
+      clockInDataResult,
+      openTasksCount,
+      eventsTodayCount,
+      dueAmountData,
+      projectsStats,
+      invoiceBreakdown,
+      invoiceTotals,
+      thisYearIncome,
+      thisYearExpenses,
+      lastYearIncome,
+      lastYearExpenses,
+      tasksBreakdown,
+      expiredTasks,
+      teamTotal,
+      onLeaveToday,
+      clockedInToday,
+      clockedOutToday,
+      lastAnnouncementResult,
+      ticketsByStatus,
+      ticketsByCategory,
+      ticketsLast30Days,
+      timeline,
+      events,
+      openProjects,
+      todos,
+      myTasks,
+      stickyNoteResult
+    ] = await Promise.all([
+      safeQuery(
+        `SELECT check_in, check_out,
+                TIMEDIFF(COALESCE(check_out, CURTIME()), check_in) as duration
+         FROM attendance
+         WHERE user_id = ? AND date = ? AND company_id = ?
+         ORDER BY check_in DESC LIMIT 1`,
+        [userId, today, companyId],
+        []
+      ),
+      safeQuery(
+        `SELECT COUNT(*) as total FROM tasks t
+         LEFT JOIN task_assignees ta ON t.id = ta.task_id
+         WHERE (ta.user_id = ? OR t.created_by = ?) AND t.company_id = ? AND t.status != 'Done' AND t.is_deleted = 0`,
+        [userId, userId, companyId]
+      ),
+      safeQuery(
+        `SELECT COUNT(*) as total FROM events 
+         WHERE company_id = ? AND DATE(starts_on_date) = ? AND is_deleted = 0`,
+        [companyId, today]
+      ),
+      safeQuery(
+        `SELECT COALESCE(SUM(unpaid), 0) as total FROM invoices 
+         WHERE company_id = ? AND is_deleted = 0`,
+        [companyId]
+      ),
+      safeQuery(
+        `SELECT 
+          SUM(CASE WHEN status = 'in progress' THEN 1 ELSE 0 END) as open_count,
+          SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_count,
+          SUM(CASE WHEN status = 'on hold' THEN 1 ELSE 0 END) as hold_count,
+          AVG(COALESCE(progress, 0)) as avg_progress
+         FROM projects WHERE company_id = ? AND is_deleted = 0`,
+        [companyId]
+      ),
+      safeQuery(
+        `SELECT 
+          status,
+          COUNT(*) as count,
+          COALESCE(SUM(total), 0) as total_amount,
+          COALESCE(SUM(unpaid), 0) as unpaid_amount
+         FROM invoices WHERE company_id = ? AND is_deleted = 0 GROUP BY status`,
+        [companyId],
+        []
+      ),
+      safeQuery(
+        `SELECT 
+          COALESCE(SUM(total), 0) as total_invoiced,
+          COALESCE(SUM(unpaid), 0) as total_due
+         FROM invoices WHERE company_id = ? AND is_deleted = 0`,
+        [companyId]
+      ),
+      safeQuery(
+        `SELECT COALESCE(SUM(paid), 0) as total FROM invoices 
+         WHERE company_id = ? AND YEAR(invoice_date) = ? AND is_deleted = 0`,
+        [companyId, currentYear]
+      ),
+      safeQuery(
+        `SELECT COALESCE(SUM(total), 0) as total FROM expenses 
+         WHERE company_id = ? AND YEAR(date) = ? AND status = 'Approved' AND is_deleted = 0`,
+        [companyId, currentYear]
+      ),
+      safeQuery(
+        `SELECT COALESCE(SUM(paid), 0) as total FROM invoices 
+         WHERE company_id = ? AND YEAR(invoice_date) = ? AND is_deleted = 0`,
+        [companyId, lastYear]
+      ),
+      safeQuery(
+        `SELECT COALESCE(SUM(total), 0) as total FROM expenses 
+         WHERE company_id = ? AND YEAR(date) = ? AND status = 'Approved' AND is_deleted = 0`,
+        [companyId, lastYear]
+      ),
+      safeQuery(
+        `SELECT 
+          status,
+          COUNT(*) as count
+         FROM tasks WHERE company_id = ? AND is_deleted = 0 GROUP BY status`,
+        [companyId],
+        []
+      ),
+      safeQuery(
+        `SELECT COUNT(*) as total FROM tasks 
+         WHERE company_id = ? AND due_date < ? AND status != 'Done' AND is_deleted = 0`,
+        [companyId, today]
+      ),
+      safeQuery(
+        `SELECT COUNT(*) as total FROM users 
+         WHERE company_id = ? AND role = 'EMPLOYEE' AND is_deleted = 0`,
+        [companyId]
+      ),
+      safeQuery(
+        `SELECT COUNT(DISTINCT user_id) as total FROM leave_requests 
+         WHERE company_id = ? AND status = 'Approved' AND ? BETWEEN start_date AND end_date AND is_deleted = 0`,
+        [companyId, today]
+      ),
+      safeQuery(
+        `SELECT COUNT(DISTINCT user_id) as total FROM attendance 
+         WHERE company_id = ? AND DATE(check_in) = ? AND check_out IS NULL AND is_deleted = 0`,
+        [companyId, today]
+      ),
+      safeQuery(
+        `SELECT COUNT(DISTINCT user_id) as total FROM attendance 
+         WHERE company_id = ? AND DATE(check_in) = ? AND check_out IS NOT NULL AND is_deleted = 0`,
+        [companyId, today]
+      ),
+      safeQuery(
+        `SELECT message, created_at FROM notifications 
+         WHERE company_id = ? AND type = 'announcement' AND is_deleted = 0
+         ORDER BY created_at DESC LIMIT 1`,
+        [companyId],
+        []
+      ),
+      safeQuery(
+        `SELECT 
+          status,
+          COUNT(*) as count
+         FROM tickets WHERE company_id = ? AND is_deleted = 0 GROUP BY status`,
+        [companyId],
+        []
+      ),
+      safeQuery(
+        `SELECT 
+          COALESCE(type, category, 'General') as category,
+          COUNT(*) as count
+         FROM tickets WHERE company_id = ? AND is_deleted = 0 GROUP BY COALESCE(type, category, 'General')`,
+        [companyId],
+        []
+      ),
+      safeQuery(
+        `SELECT DATE(created_at) as date, COUNT(*) as count 
+         FROM tickets 
+         WHERE company_id = ? AND created_at >= ? AND is_deleted = 0 
+         GROUP BY DATE(created_at) ORDER BY date`,
+        [companyId, thirtyDaysAgo],
+        []
+      ),
+      safeQuery(
+        `SELECT 
+          t.id, t.title, t.status, t.priority, t.updated_at,
+          u.name as user_name,
+          p.project_name
+         FROM tasks t
+         LEFT JOIN users u ON t.created_by = u.id
+         LEFT JOIN projects p ON t.project_id = p.id
+         WHERE t.company_id = ? AND t.is_deleted = 0
+         ORDER BY t.updated_at DESC LIMIT 10`,
+        [companyId],
+        []
+      ),
+      safeQuery(
+        `SELECT id, event_name, starts_on_date, starts_on_time, ends_on_date, ends_on_time, description, where_event
+         FROM events 
+         WHERE company_id = ? AND is_deleted = 0
+         ORDER BY 
+           CASE WHEN starts_on_date >= ? THEN 0 ELSE 1 END,
+           ABS(DATEDIFF(starts_on_date, ?))
+         LIMIT 10`,
+        [companyId, today, today],
+        []
+      ),
+      safeQuery(
+        `SELECT id, project_name, start_date, deadline, progress, status, client_id
+         FROM projects 
+         WHERE company_id = ? AND status = 'in progress' AND is_deleted = 0
+         ORDER BY deadline ASC LIMIT 10`,
+        [companyId],
+        []
+      ),
+      safeQuery(
+        `SELECT id, title, description, is_completed, created_at
+         FROM user_todos 
+         WHERE user_id = ? AND is_deleted = 0
+         ORDER BY created_at DESC LIMIT 20`,
+        [userId],
+        []
+      ),
+      safeQuery(
+        `SELECT t.id, t.title, t.start_date, t.due_date, t.status, t.priority, t.tags, p.project_name
+         FROM tasks t
+         LEFT JOIN task_assignees ta ON t.id = ta.task_id
+         LEFT JOIN projects p ON t.project_id = p.id
+         WHERE (ta.user_id = ? OR t.created_by = ?) AND t.company_id = ? AND t.is_deleted = 0
+         ORDER BY t.due_date ASC LIMIT 10`,
+        [userId, userId, companyId],
+        []
+      ),
+      safeQuery(
+        `SELECT content FROM user_sticky_notes WHERE user_id = ? LIMIT 1`,
+        [userId],
+        []
+      )
+    ]);
 
-    const [openTasksCount] = await safeQuery(
-      `SELECT COUNT(*) as total FROM tasks t
-       LEFT JOIN task_assignees ta ON t.id = ta.task_id
-       WHERE (ta.user_id = ? OR t.created_by = ?) AND t.company_id = ? AND t.status != 'Done' AND t.is_deleted = 0`,
-      [userId, userId, companyId]
-    );
-
-    const [eventsTodayCount] = await safeQuery(
-      `SELECT COUNT(*) as total FROM events 
-       WHERE company_id = ? AND DATE(starts_on_date) = ? AND is_deleted = 0`,
-      [companyId, today]
-    );
-
-    const [dueAmountData] = await safeQuery(
-      `SELECT COALESCE(SUM(unpaid), 0) as total FROM invoices 
-       WHERE company_id = ? AND is_deleted = 0`,
-      [companyId]
-    );
-
-    // ===== 2. PROJECTS OVERVIEW =====
-    const [projectsStats] = await safeQuery(
-      `SELECT 
-        SUM(CASE WHEN status = 'in progress' THEN 1 ELSE 0 END) as open_count,
-        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_count,
-        SUM(CASE WHEN status = 'on hold' THEN 1 ELSE 0 END) as hold_count,
-        AVG(COALESCE(progress, 0)) as avg_progress
-       FROM projects WHERE company_id = ? AND is_deleted = 0`,
-      [companyId]
-    );
-
-    // ===== 3. INVOICE OVERVIEW =====
-    const invoiceBreakdown = await safeQuery(
-      `SELECT 
-        status,
-        COUNT(*) as count,
-        COALESCE(SUM(total), 0) as total_amount,
-        COALESCE(SUM(unpaid), 0) as unpaid_amount
-       FROM invoices WHERE company_id = ? AND is_deleted = 0 GROUP BY status`,
-      [companyId],
-      []
-    );
-
-    const [invoiceTotals] = await safeQuery(
-      `SELECT 
-        COALESCE(SUM(total), 0) as total_invoiced,
-        COALESCE(SUM(unpaid), 0) as total_due
-       FROM invoices WHERE company_id = ? AND is_deleted = 0`,
-      [companyId]
-    );
-
-    // ===== 4. INCOME VS EXPENSES =====
-    const [thisYearIncome] = await safeQuery(
-      `SELECT COALESCE(SUM(paid), 0) as total FROM invoices 
-       WHERE company_id = ? AND YEAR(invoice_date) = ? AND is_deleted = 0`,
-      [companyId, currentYear]
-    );
-
-    const [thisYearExpenses] = await safeQuery(
-      `SELECT COALESCE(SUM(total), 0) as total FROM expenses 
-       WHERE company_id = ? AND YEAR(date) = ? AND status = 'Approved' AND is_deleted = 0`,
-      [companyId, currentYear]
-    );
-
-    const [lastYearIncome] = await safeQuery(
-      `SELECT COALESCE(SUM(paid), 0) as total FROM invoices 
-       WHERE company_id = ? AND YEAR(invoice_date) = ? AND is_deleted = 0`,
-      [companyId, lastYear]
-    );
-
-    const [lastYearExpenses] = await safeQuery(
-      `SELECT COALESCE(SUM(total), 0) as total FROM expenses 
-       WHERE company_id = ? AND YEAR(date) = ? AND status = 'Approved' AND is_deleted = 0`,
-      [companyId, lastYear]
-    );
-
-    // ===== 5. ALL TASKS OVERVIEW =====
-    const tasksBreakdown = await safeQuery(
-      `SELECT 
-        status,
-        COUNT(*) as count
-       FROM tasks WHERE company_id = ? AND is_deleted = 0 GROUP BY status`,
-      [companyId],
-      []
-    );
-
-    // Expired tasks (past deadline, not done)
-    const [expiredTasks] = await safeQuery(
-      `SELECT COUNT(*) as total FROM tasks 
-       WHERE company_id = ? AND due_date < ? AND status != 'Done' AND is_deleted = 0`,
-      [companyId, today]
-    );
-
-    // ===== 6. TEAM MEMBERS OVERVIEW =====
-    const [teamTotal] = await safeQuery(
-      `SELECT COUNT(*) as total FROM users 
-       WHERE company_id = ? AND role = 'EMPLOYEE' AND is_deleted = 0`,
-      [companyId]
-    );
-
-    const [onLeaveToday] = await safeQuery(
-      `SELECT COUNT(DISTINCT user_id) as total FROM leave_requests 
-       WHERE company_id = ? AND status = 'Approved' AND ? BETWEEN start_date AND end_date AND is_deleted = 0`,
-      [companyId, today]
-    );
-
-    const [clockedInToday] = await safeQuery(
-      `SELECT COUNT(DISTINCT user_id) as total FROM attendance 
-       WHERE company_id = ? AND DATE(check_in) = ? AND check_out IS NULL AND is_deleted = 0`,
-      [companyId, today]
-    );
-
-    const [clockedOutToday] = await safeQuery(
-      `SELECT COUNT(DISTINCT user_id) as total FROM attendance 
-       WHERE company_id = ? AND DATE(check_in) = ? AND check_out IS NOT NULL AND is_deleted = 0`,
-      [companyId, today]
-    );
-
-    // Last announcement
-    const [lastAnnouncement] = await safeQuery(
-      `SELECT message, created_at FROM notifications 
-       WHERE company_id = ? AND type = 'announcement' AND is_deleted = 0
-       ORDER BY created_at DESC LIMIT 1`,
-      [companyId],
-      []
-    );
-
-    // ===== 7. TICKET STATUS =====
-    const ticketsByStatus = await safeQuery(
-      `SELECT 
-        status,
-        COUNT(*) as count
-       FROM tickets WHERE company_id = ? AND is_deleted = 0 GROUP BY status`,
-      [companyId],
-      []
-    );
-
-    const ticketsByCategory = await safeQuery(
-      `SELECT 
-        COALESCE(type, category, 'General') as category,
-        COUNT(*) as count
-       FROM tickets WHERE company_id = ? AND is_deleted = 0 GROUP BY COALESCE(type, category, 'General')`,
-      [companyId],
-      []
-    );
-
-    // Tickets last 30 days
-    const ticketsLast30Days = await safeQuery(
-      `SELECT DATE(created_at) as date, COUNT(*) as count 
-       FROM tickets 
-       WHERE company_id = ? AND created_at >= ? AND is_deleted = 0 
-       GROUP BY DATE(created_at) ORDER BY date`,
-      [companyId, thirtyDaysAgo],
-      []
-    );
-
-    // ===== 8. PROJECT TIMELINE =====
-    const timeline = await safeQuery(
-      `SELECT 
-        t.id, t.title, t.status, t.priority, t.updated_at,
-        u.name as user_name,
-        p.project_name
-       FROM tasks t
-       LEFT JOIN users u ON t.created_by = u.id
-       LEFT JOIN projects p ON t.project_id = p.id
-       WHERE t.company_id = ? AND t.is_deleted = 0
-       ORDER BY t.updated_at DESC LIMIT 10`,
-      [companyId],
-      []
-    );
-
-    // ===== 9. EVENTS LIST =====
-    // Show upcoming events first, then recent past events
-    const events = await safeQuery(
-      `SELECT id, event_name, starts_on_date, starts_on_time, ends_on_date, ends_on_time, description, where_event
-       FROM events 
-       WHERE company_id = ? AND is_deleted = 0
-       ORDER BY 
-         CASE WHEN starts_on_date >= ? THEN 0 ELSE 1 END,
-         ABS(DATEDIFF(starts_on_date, ?))
-       LIMIT 10`,
-      [companyId, today, today],
-      []
-    );
-
-    // ===== 10. OPEN PROJECTS =====
-    const openProjects = await safeQuery(
-      `SELECT id, project_name, start_date, deadline, progress, status, client_id
-       FROM projects 
-       WHERE company_id = ? AND status = 'in progress' AND is_deleted = 0
-       ORDER BY deadline ASC LIMIT 10`,
-      [companyId],
-      []
-    );
-
-    // ===== 11. TO-DO (PRIVATE) =====
-    const todos = await safeQuery(
-      `SELECT id, title, description, is_completed, created_at
-       FROM user_todos 
-       WHERE user_id = ? AND is_deleted = 0
-       ORDER BY created_at DESC LIMIT 20`,
-      [userId],
-      []
-    );
-
-    // ===== 12. MY TASKS =====
-    const myTasks = await safeQuery(
-      `SELECT t.id, t.title, t.start_date, t.due_date, t.status, t.priority, t.tags, p.project_name
-       FROM tasks t
-       LEFT JOIN task_assignees ta ON t.id = ta.task_id
-       LEFT JOIN projects p ON t.project_id = p.id
-       WHERE (ta.user_id = ? OR t.created_by = ?) AND t.company_id = ? AND t.is_deleted = 0
-       ORDER BY t.due_date ASC LIMIT 10`,
-      [userId, userId, companyId],
-      []
-    );
-
-    // ===== 13. STICKY NOTE =====
-    const [stickyNote] = await safeQuery(
-      `SELECT content FROM user_sticky_notes WHERE user_id = ? LIMIT 1`,
-      [userId],
-      []
-    );
+    const clockInData = clockInDataResult[0] || clockInDataResult;
+    const lastAnnouncement = lastAnnouncementResult[0] || lastAnnouncementResult;
+    const stickyNote = stickyNoteResult[0] || stickyNoteResult;
 
     // Process invoice breakdown
     const invoiceOverview = {
@@ -540,13 +528,13 @@ const getCompleteDashboard = async (req, res) => {
 const saveTodo = async (req, res) => {
   try {
     const { user_id, title, description } = req.body;
-    
+
     await pool.execute(
       `INSERT INTO user_todos (user_id, title, description, is_completed, is_deleted, created_at) 
        VALUES (?, ?, ?, 0, 0, NOW())`,
       [user_id, title, description || '']
     );
-    
+
     res.json({ success: true, message: 'Todo saved successfully' });
   } catch (error) {
     console.error('Save todo error:', error);
@@ -562,12 +550,12 @@ const updateTodo = async (req, res) => {
   try {
     const { id } = req.params;
     const { is_completed } = req.body;
-    
+
     await pool.execute(
       `UPDATE user_todos SET is_completed = ? WHERE id = ?`,
       [is_completed ? 1 : 0, id]
     );
-    
+
     res.json({ success: true, message: 'Todo updated successfully' });
   } catch (error) {
     console.error('Update todo error:', error);
@@ -582,9 +570,9 @@ const updateTodo = async (req, res) => {
 const deleteTodo = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     await pool.execute(`UPDATE user_todos SET is_deleted = 1 WHERE id = ?`, [id]);
-    
+
     res.json({ success: true, message: 'Todo deleted successfully' });
   } catch (error) {
     console.error('Delete todo error:', error);
@@ -599,7 +587,7 @@ const deleteTodo = async (req, res) => {
 const saveStickyNote = async (req, res) => {
   try {
     const { user_id, content } = req.body;
-    
+
     // Upsert sticky note
     await pool.execute(
       `INSERT INTO user_sticky_notes (user_id, content, updated_at) 
@@ -607,7 +595,7 @@ const saveStickyNote = async (req, res) => {
        ON DUPLICATE KEY UPDATE content = ?, updated_at = NOW()`,
       [user_id, content, content]
     );
-    
+
     res.json({ success: true, message: 'Sticky note saved successfully' });
   } catch (error) {
     console.error('Save sticky note error:', error);
@@ -628,7 +616,6 @@ const getAdminDashboard = async (req, res) => {
     // Use safe queries to handle missing tables gracefully
     const [
       leadsCount,
-      clientsCount,
       employeesCount,
       companiesCount,
       projectsCount,
@@ -639,14 +626,6 @@ const getAdminDashboard = async (req, res) => {
       dealsWonLostRows,
       eventsTodayCount
     ] = await Promise.all([
-      safeQuery(
-        `SELECT COUNT(*) as total FROM leads WHERE company_id = ? AND is_deleted = 0`,
-        [companyId]
-      ),
-      safeQuery(
-        `SELECT COUNT(*) as total FROM clients WHERE company_id = ? AND is_deleted = 0`,
-        [companyId]
-      ),
       safeQuery(
         `SELECT COUNT(*) as total FROM users WHERE company_id = ? AND role = 'EMPLOYEE' AND is_deleted = 0`,
         [companyId]
@@ -724,7 +703,6 @@ const getAdminDashboard = async (req, res) => {
       success: true,
       data: {
         leads: totalLeads,
-        clients: clientsCount[0]?.total || 0,
         employees: employeesCount[0]?.total || 0,
         companies: companiesCount[0]?.total || 0,
         projects: projectsCount[0]?.total || 0,
@@ -761,7 +739,7 @@ const getEmployeeDashboard = async (req, res) => {
     // Use JWT data for strict data isolation
     const userId = req.userId || req.query.user_id;
     const companyId = req.companyId || req.query.company_id || 1;
-    
+
     if (!userId) {
       return res.status(400).json({
         success: false,
@@ -823,455 +801,13 @@ const getEmployeeDashboard = async (req, res) => {
   }
 };
 
-/**
- * Get client dashboard stats
- * GET /api/v1/dashboard/client
- * Uses JWT userId - Client can only see their own data
- */
-const getClientDashboard = async (req, res) => {
-  try {
-    // Use JWT data for strict data isolation
-    const userId = req.userId || req.query.user_id;
-    const companyId = req.companyId || req.query.company_id || 1;
-    
-    if (!userId) {
-      return res.status(400).json({
-        success: false,
-        error: 'User ID is required'
-      });
-    }
 
-    console.log('Client dashboard - userId:', userId, 'companyId:', companyId);
-
-    // Get client ID from user - try multiple ways to find the client
-    let clients = await safeQuery(
-      `SELECT id FROM clients WHERE owner_id = ? AND company_id = ? AND is_deleted = 0 LIMIT 1`,
-      [userId, companyId],
-      []
-    );
-
-    // If not found by owner_id, try by user_id directly
-    if (clients.length === 0) {
-      clients = await safeQuery(
-        `SELECT c.id FROM clients c
-         INNER JOIN users u ON c.owner_id = u.id
-         WHERE u.id = ? AND c.company_id = ? AND c.is_deleted = 0 LIMIT 1`,
-        [userId, companyId],
-        []
-      );
-    }
-
-    // If still not found, use userId directly as clientId (for direct client users)
-    let clientId = userId;
-    if (clients.length > 0) {
-      clientId = clients[0].id;
-    }
-    console.log('Using client ID:', clientId);
-
-    // Use safe queries to handle missing tables gracefully
-    const [
-      projectsCount,
-      tasksCount,
-      invoices,
-      payments,
-      contractsCount,
-      estimatesCount,
-      creditNotesCount,
-      contactsCount
-    ] = await Promise.all([
-      safeQuery(
-        `SELECT COUNT(*) as total FROM projects WHERE client_id = ? AND is_deleted = 0`,
-        [clientId]
-      ),
-      safeQuery(
-        `SELECT COUNT(*) as total FROM tasks WHERE project_id IN (
-           SELECT id FROM projects WHERE client_id = ?
-         ) AND is_deleted = 0`,
-        [clientId]
-      ),
-      safeQuery(
-        `SELECT COALESCE(SUM(unpaid), 0) as total FROM invoices WHERE client_id = ? AND is_deleted = 0`,
-        [clientId]
-      ),
-      safeQuery(
-        `SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE invoice_id IN (
-           SELECT id FROM invoices WHERE client_id = ?
-         ) AND is_deleted = 0`,
-        [clientId]
-      ),
-      safeQuery(
-        `SELECT COUNT(*) as total FROM contracts WHERE client_id = ? AND is_deleted = 0`,
-        [clientId]
-      ),
-      safeQuery(
-        `SELECT COUNT(*) as total FROM estimates WHERE client_id = ? AND is_deleted = 0`,
-        [clientId]
-      ),
-      safeQuery(
-        `SELECT COUNT(*) as total FROM credit_notes WHERE client_id = ? AND is_deleted = 0`,
-        [clientId]
-      ),
-      safeQuery(
-        `SELECT COUNT(*) as total FROM client_contacts WHERE client_id = ? AND is_deleted = 0`,
-        [clientId]
-      )
-    ]);
-
-    res.json({
-      success: true,
-      data: {
-        my_projects: projectsCount[0]?.total || 0,
-        my_tasks: tasksCount[0]?.total || 0,
-        outstanding_invoices: invoices[0]?.total || 0,
-        total_payments: payments[0]?.total || 0,
-        contracts_count: contractsCount[0]?.total || 0,
-        estimates_count: estimatesCount[0]?.total || 0,
-        credit_notes_count: creditNotesCount[0]?.total || 0,
-        contacts_count: contactsCount[0]?.total || 0
-      }
-    });
-  } catch (error) {
-    console.error('Get client dashboard error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch dashboard data',
-      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
-    });
-  }
-};
-
-/**
- * Get client work data (projects and tasks)
- * GET /api/v1/dashboard/client/work
- * Uses JWT userId - Client can only see their own data
- */
-const getClientWork = async (req, res) => {
-  try {
-    const userId = req.userId || req.query.user_id;
-    const companyId = req.companyId || req.query.company_id || 1;
-    
-    if (!userId) {
-      return res.status(400).json({ success: false, error: 'User ID is required' });
-    }
-
-    // Get client ID from user - try multiple ways to find the client
-    let clients = await safeQuery(
-      `SELECT id FROM clients WHERE owner_id = ? AND company_id = ? AND is_deleted = 0 LIMIT 1`,
-      [userId, companyId],
-      []
-    );
-
-    // If not found by owner_id, use userId directly as clientId
-    let clientId = userId;
-    if (clients.length > 0) {
-      clientId = clients[0].id;
-    }
-
-    // Get projects
-    const projects = await safeQuery(
-      `SELECT p.*, c.company_name as client_name 
-       FROM projects p
-       LEFT JOIN clients c ON p.client_id = c.id
-       WHERE p.client_id = ? AND p.is_deleted = 0
-       ORDER BY p.created_at DESC
-       LIMIT 10`,
-      [clientId],
-      []
-    );
-
-    const projectIds = projects.map(p => p.id);
-    let tasks = [];
-    if (projectIds.length > 0) {
-      tasks = await safeQuery(
-        `SELECT t.*, p.project_name, u.name as assigned_to_name
-         FROM tasks t
-         LEFT JOIN projects p ON t.project_id = p.id
-         LEFT JOIN users u ON t.created_by = u.id
-         WHERE t.project_id IN (${projectIds.map(() => '?').join(',')}) AND t.is_deleted = 0
-         ORDER BY t.created_at DESC
-         LIMIT 20`,
-        projectIds,
-        []
-      );
-    }
-
-    res.json({
-      success: true,
-      data: {
-        projects: projects || [],
-        tasks: tasks || []
-      }
-    });
-  } catch (error) {
-    console.error('Get client work error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch work data',
-      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
-    });
-  }
-};
-
-/**
- * Get client finance data (invoices, payments, estimates, contracts, credit notes)
- * GET /api/v1/dashboard/client/finance
- * Uses JWT userId - Client can only see their own data
- */
-const getClientFinance = async (req, res) => {
-  try {
-    const userId = req.userId || req.query.user_id;
-    const companyId = req.companyId || req.query.company_id || 1;
-    
-    if (!userId) {
-      return res.status(400).json({ success: false, error: 'User ID is required' });
-    }
-
-    // Get client ID from user - try multiple ways to find the client
-    let clients = await safeQuery(
-      `SELECT id FROM clients WHERE owner_id = ? AND company_id = ? AND is_deleted = 0 LIMIT 1`,
-      [userId, companyId],
-      []
-    );
-
-    // If not found by owner_id, use userId directly as clientId
-    let clientId = userId;
-    if (clients.length > 0) {
-      clientId = clients[0].id;
-    }
-
-    // Get invoices
-    const invoices = await safeQuery(
-      `SELECT i.*, c.company_name as client_name
-       FROM invoices i
-       LEFT JOIN clients c ON i.client_id = c.id
-       WHERE i.client_id = ? AND i.is_deleted = 0
-       ORDER BY i.created_at DESC
-       LIMIT 10`,
-      [clientId],
-      []
-    );
-
-    const invoiceIds = invoices.map(i => i.id);
-    let payments = [];
-    if (invoiceIds.length > 0) {
-      payments = await safeQuery(
-        `SELECT p.*, i.invoice_number
-         FROM payments p
-         LEFT JOIN invoices i ON p.invoice_id = i.id
-         WHERE p.invoice_id IN (${invoiceIds.map(() => '?').join(',')}) AND p.is_deleted = 0
-         ORDER BY p.created_at DESC
-         LIMIT 10`,
-        invoiceIds,
-        []
-      );
-    }
-
-    // Get estimates
-    const estimates = await safeQuery(
-      `SELECT e.*, c.company_name as client_name
-       FROM estimates e
-       LEFT JOIN clients c ON e.client_id = c.id
-       WHERE e.client_id = ? AND e.is_deleted = 0
-       ORDER BY e.created_at DESC
-       LIMIT 10`,
-      [clientId],
-      []
-    );
-
-    // Get contracts
-    const contracts = await safeQuery(
-      `SELECT ct.*, c.company_name as client_name
-       FROM contracts ct
-       LEFT JOIN clients c ON ct.client_id = c.id
-       WHERE ct.client_id = ? AND ct.is_deleted = 0
-       ORDER BY ct.created_at DESC
-       LIMIT 10`,
-      [clientId],
-      []
-    );
-
-    // Get credit notes
-    const creditNotes = await safeQuery(
-      `SELECT cn.*, c.company_name as client_name
-       FROM credit_notes cn
-       LEFT JOIN clients c ON cn.client_id = c.id
-       WHERE cn.client_id = ? AND cn.is_deleted = 0
-       ORDER BY cn.created_at DESC
-       LIMIT 10`,
-      [clientId],
-      []
-    );
-
-    res.json({
-      success: true,
-      data: {
-        invoices: invoices || [],
-        payments: payments || [],
-        estimates: estimates || [],
-        contracts: contracts || [],
-        credit_notes: creditNotes || []
-      }
-    });
-  } catch (error) {
-    console.error('Get client finance error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch finance data',
-      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
-    });
-  }
-};
-
-/**
- * Get client announcements
- * GET /api/v1/dashboard/client/announcements
- * Uses JWT userId
- */
-const getClientAnnouncements = async (req, res) => {
-  try {
-    const userId = req.userId || req.query.user_id;
-    const companyId = req.companyId || req.query.company_id || 1;
-
-    // Get announcements from notifications table
-    const announcements = await safeQuery(
-      `SELECT n.*, u.name as created_by_name
-       FROM notifications n
-       LEFT JOIN users u ON n.created_by = u.id
-       WHERE n.company_id = ? 
-         AND (n.user_id = ? OR n.user_id IS NULL)
-         AND n.type = 'announcement'
-         AND n.is_deleted = 0
-       ORDER BY n.created_at DESC
-       LIMIT 10`,
-      [companyId, userId],
-      []
-    );
-
-    res.json({
-      success: true,
-      data: announcements || []
-    });
-  } catch (error) {
-    console.error('Get client announcements error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch announcements'
-    });
-  }
-};
-
-/**
- * Get client recent activity
- * GET /api/v1/dashboard/client/activity
- * Uses JWT userId
- */
-const getClientActivity = async (req, res) => {
-  try {
-    const userId = req.userId || req.query.user_id;
-    const companyId = req.companyId || req.query.company_id || 1;
-
-    // Get client ID
-    let clients = await safeQuery(
-      `SELECT id FROM clients WHERE owner_id = ? AND company_id = ? AND is_deleted = 0 LIMIT 1`,
-      [userId, companyId],
-      []
-    );
-
-    let clientId = userId;
-    if (clients.length > 0) {
-      clientId = clients[0].id;
-    }
-
-    // Get recent activity from various sources
-    const activities = [];
-
-    // Recent invoices
-    const recentInvoices = await safeQuery(
-      `SELECT id, invoice_number, status, created_at, 'invoice' as type
-       FROM invoices 
-       WHERE client_id = ? AND is_deleted = 0
-       ORDER BY created_at DESC
-       LIMIT 5`,
-      [clientId],
-      []
-    );
-    
-    recentInvoices.forEach(inv => {
-      activities.push({
-        id: `inv-${inv.id}`,
-        message: `Invoice ${inv.invoice_number} ${inv.status === 'Paid' ? 'paid' : 'sent'}`,
-        date: inv.created_at,
-        type: 'invoice'
-      });
-    });
-
-    // Recent payments
-    const recentPayments = await safeQuery(
-      `SELECT p.id, p.amount, p.created_at, i.invoice_number
-       FROM payments p
-       LEFT JOIN invoices i ON p.invoice_id = i.id
-       WHERE i.client_id = ? AND p.is_deleted = 0
-       ORDER BY p.created_at DESC
-       LIMIT 5`,
-      [clientId],
-      []
-    );
-    
-    recentPayments.forEach(pay => {
-      activities.push({
-        id: `pay-${pay.id}`,
-        message: `Payment of $${pay.amount} received for ${pay.invoice_number || 'Invoice'}`,
-        date: pay.created_at,
-        type: 'payment'
-      });
-    });
-
-    // Recent projects
-    const recentProjects = await safeQuery(
-      `SELECT id, project_name, status, created_at
-       FROM projects 
-       WHERE client_id = ? AND is_deleted = 0
-       ORDER BY created_at DESC
-       LIMIT 5`,
-      [clientId],
-      []
-    );
-    
-    recentProjects.forEach(proj => {
-      activities.push({
-        id: `proj-${proj.id}`,
-        message: `Project "${proj.project_name}" ${proj.status || 'created'}`,
-        date: proj.created_at,
-        type: 'project'
-      });
-    });
-
-    // Sort by date
-    activities.sort((a, b) => new Date(b.date) - new Date(a.date));
-
-    res.json({
-      success: true,
-      data: activities.slice(0, 10)
-    });
-  } catch (error) {
-    console.error('Get client activity error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch activity'
-    });
-  }
-};
 
 module.exports = {
   getSuperAdminDashboard,
   getCompleteDashboard,
   getAdminDashboard,
   getEmployeeDashboard,
-  getClientDashboard,
-  getClientWork,
-  getClientFinance,
-  getClientAnnouncements,
-  getClientActivity,
   saveTodo,
   updateTodo,
   deleteTodo,

@@ -1,8 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const reportController = require('../controllers/reportController');
+const { verifyToken, requireRole, ROLES } = require('../middleware/auth');
 
-// No authentication required - all routes are public
+// Applied authentication to all report routes
+router.use(verifyToken);
+// Restricted to ADMIN and SUPERADMIN only
+router.use(requireRole([ROLES.SUPERADMIN, ROLES.ADMIN]));
+
+// Report routes
 router.get('/sales', reportController.getSalesReport);
 router.get('/revenue', reportController.getRevenueReport);
 router.get('/projects', reportController.getProjectStatusReport);

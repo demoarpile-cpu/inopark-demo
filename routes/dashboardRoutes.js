@@ -21,12 +21,7 @@ router.get('/admin', requireRole([ROLES.SUPERADMIN, ROLES.ADMIN]), dashboardCont
 // Employee Dashboard - Access to own data only
 router.get('/employee', requireRole([ROLES.SUPERADMIN, ROLES.ADMIN, ROLES.EMPLOYEE]), dashboardController.getEmployeeDashboard);
 
-// Client Dashboard - Access to own data only
-router.get('/client', requireRole([ROLES.SUPERADMIN, ROLES.ADMIN, ROLES.CLIENT]), dashboardController.getClientDashboard);
-router.get('/client/work', requireRole([ROLES.SUPERADMIN, ROLES.ADMIN, ROLES.CLIENT]), dashboardController.getClientWork);
-router.get('/client/finance', requireRole([ROLES.SUPERADMIN, ROLES.ADMIN, ROLES.CLIENT]), dashboardController.getClientFinance);
-router.get('/client/announcements', requireRole([ROLES.SUPERADMIN, ROLES.ADMIN, ROLES.CLIENT]), dashboardController.getClientAnnouncements);
-router.get('/client/activity', requireRole([ROLES.SUPERADMIN, ROLES.ADMIN, ROLES.CLIENT]), dashboardController.getClientActivity);
+
 
 // Generic dashboard - redirects based on role
 router.get('/', dashboardController.getCompleteDashboard);

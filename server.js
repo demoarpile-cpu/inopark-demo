@@ -12,7 +12,6 @@ const morgan = require('morgan');
 const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
 const leadRoutes = require('./routes/leadRoutes');
-const clientRoutes = require('./routes/clientRoutes');
 const projectRoutes = require('./routes/projectRoutes');
 const taskRoutes = require('./routes/taskRoutes');
 const invoiceRoutes = require('./routes/invoiceRoutes');
@@ -23,7 +22,6 @@ const dealRoutes = require('./routes/dealRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const expenseRoutes = require('./routes/expenseRoutes');
 const contractRoutes = require('./routes/contractRoutes');
-const subscriptionRoutes = require('./routes/subscriptionRoutes');
 const employeeRoutes = require('./routes/employeeRoutes');
 const attendanceRoutes = require('./routes/attendanceRoutes');
 const timeTrackingRoutes = require('./routes/timeTrackingRoutes');
@@ -56,7 +54,6 @@ const pwaRoutes = require('./routes/pwaRoutes');
 const noteRoutes = require('./routes/noteRoutes');
 const orderRoutes = require('./routes/orderRoutes');
 const itemRoutes = require('./routes/itemRoutes');
-const moduleSettingsRoutes = require('./routes/moduleSettingsRoutes');
 const activityRoutes = require('./routes/activityRoutes');
 const leadSourceRoutes = require('./routes/leadSourceRoutes');
 const leadPipelineRoutes = require('./routes/leadPipelineRoutes');
@@ -77,10 +74,9 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
 
-// CORS - Allow multiple origins
+// CORS - Maximally tolerant for Bearer Token auth (Mobile friendly)
 app.use(cors({
-  origin: true, // Allow all origins dynamically
-  credentials: true,
+  origin: '*', // Allow all origins unconditionally
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
   exposedHeaders: ['Content-Range', 'X-Content-Range'],
@@ -128,7 +124,6 @@ app.use(`${apiBase}/auth`, authRoutes);
 app.use(`${apiBase}/dashboard`, dashboardRoutes);
 app.use(`${apiBase}/users`, userRoutes);
 app.use(`${apiBase}/leads`, leadRoutes);
-app.use(`${apiBase}/clients`, clientRoutes);
 app.use(`${apiBase}/projects`, projectRoutes);
 app.use(`${apiBase}/tasks`, taskRoutes);
 app.use(`${apiBase}/meetings`, require('./routes/meetingRoutes'));
@@ -145,7 +140,6 @@ app.use(`${apiBase}/deal-pipelines`, dealPipelineRoutes);
 app.use(`${apiBase}/contacts`, contactRoutes);
 app.use(`${apiBase}/expenses`, expenseRoutes);
 app.use(`${apiBase}/contracts`, contractRoutes);
-app.use(`${apiBase}/subscriptions`, subscriptionRoutes);
 app.use(`${apiBase}/employees`, employeeRoutes);
 app.use(`${apiBase}/attendance`, attendanceRoutes);
 app.use(`${apiBase}/time-logs`, timeTrackingRoutes);
@@ -180,7 +174,7 @@ app.use(`${apiBase}/notes`, noteRoutes);
 app.use(`${apiBase}/orders`, orderRoutes);
 app.use(`${apiBase}/items`, itemRoutes);
 app.use(`${apiBase}/pwa`, pwaRoutes);
-app.use(`${apiBase}/module-settings`, moduleSettingsRoutes);
+
 
 // Notification Settings routes
 const notificationSettingsRoutes = require('./routes/notificationSettingsRoutes');

@@ -7,26 +7,7 @@
 const pool = require('../config/db');
 
 // Default module settings - all menus enabled by default (must match admin Module Settings)
-const DEFAULT_CLIENT_MENUS = {
-  dashboard: true,
-  projects: true,
-  proposals: true,
-  estimates: true,
-  invoices: true,
-  payments: true,
-  creditNotes: true,
-  contracts: true,
-  files: true,
-  notes: true,
-  store: true,
-  subscriptions: true,
-  orders: true,
-  tickets: true,
-  messages: true,
-  profile: true,
-  notifications: true,
-  settings: true,
-};
+
 
 const DEFAULT_EMPLOYEE_MENUS = {
   dashboard: true,
@@ -43,7 +24,6 @@ const DEFAULT_EMPLOYEE_MENUS = {
 };
 
 // Valid menu keys for validation
-const VALID_CLIENT_MENUS = Object.keys(DEFAULT_CLIENT_MENUS);
 const VALID_EMPLOYEE_MENUS = Object.keys(DEFAULT_EMPLOYEE_MENUS);
 
 /**
@@ -56,7 +36,6 @@ const ensureTableExists = async () => {
       CREATE TABLE IF NOT EXISTS module_settings (
         id INT AUTO_INCREMENT PRIMARY KEY,
         company_id INT NOT NULL,
-        client_menus JSON,
         employee_menus JSON,
         module_permissions JSON,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -123,7 +102,6 @@ const getModuleSettings = async (req, res) => {
         success: true,
         data: {
           company_id: parseInt(companyId),
-          client_menus: DEFAULT_CLIENT_MENUS,
           employee_menus: DEFAULT_EMPLOYEE_MENUS,
         }
       });
@@ -131,20 +109,8 @@ const getModuleSettings = async (req, res) => {
 
     // Parse JSON fields
     const settings = rows[0];
-    let clientMenus = DEFAULT_CLIENT_MENUS;
     let employeeMenus = DEFAULT_EMPLOYEE_MENUS;
     let modulePermissions = {};
-
-    try {
-      if (settings.client_menus) {
-        const parsed = typeof settings.client_menus === 'string' 
-          ? JSON.parse(settings.client_menus) 
-          : settings.client_menus;
-        clientMenus = { ...DEFAULT_CLIENT_MENUS, ...parsed };
-      }
-    } catch (e) {
-      console.error('Error parsing client_menus:', e);
-    }
 
     try {
       if (settings.employee_menus) {
@@ -173,7 +139,6 @@ const getModuleSettings = async (req, res) => {
       data: {
         id: settings.id,
         company_id: settings.company_id,
-        client_menus: clientMenus,
         employee_menus: employeeMenus,
         module_permissions: modulePermissions,
         created_at: settings.created_at,
@@ -200,7 +165,7 @@ const updateModuleSettings = async (req, res) => {
     await ensureTableExists();
 
     const companyId = req.body.company_id || req.query.company_id || req.user?.company_id;
-    const { client_menus, employee_menus, module_permissions } = req.body;
+    const { employee_menus, module_permissions } = req.body;
 
     if (!companyId) {
       return res.status(400).json({
@@ -209,18 +174,7 @@ const updateModuleSettings = async (req, res) => {
       });
     }
 
-    // Validate client menus if provided
-    if (client_menus) {
-      const invalidClientKeys = Object.keys(client_menus).filter(
-        key => !VALID_CLIENT_MENUS.includes(key)
-      );
-      if (invalidClientKeys.length > 0) {
-        return res.status(400).json({
-          success: false,
-          error: `Invalid client menu keys: ${invalidClientKeys.join(', ')}`
-        });
-      }
-    }
+
 
     // Validate employee menus if provided
     if (employee_menus) {
@@ -235,11 +189,6 @@ const updateModuleSettings = async (req, res) => {
       }
     }
 
-    // Merge with defaults to ensure all keys exist
-    const finalClientMenus = client_menus 
-      ? { ...DEFAULT_CLIENT_MENUS, ...client_menus }
-      : DEFAULT_CLIENT_MENUS;
-    
     const finalEmployeeMenus = employee_menus
       ? { ...DEFAULT_EMPLOYEE_MENUS, ...employee_menus }
       : DEFAULT_EMPLOYEE_MENUS;
@@ -257,10 +206,9 @@ const updateModuleSettings = async (req, res) => {
     const filteredPermissions = {};
     Object.keys(finalModulePermissions).forEach(moduleKey => {
       // Check if module is enabled in either client or employee menus
-      const isClientEnabled = finalClientMenus[moduleKey] !== false;
       const isEmployeeEnabled = finalEmployeeMenus[moduleKey] !== false;
       
-      if (isClientEnabled || isEmployeeEnabled) {
+      if (isEmployeeEnabled) {
         filteredPermissions[moduleKey] = finalModulePermissions[moduleKey];
       }
     });
@@ -269,10 +217,9 @@ const updateModuleSettings = async (req, res) => {
       // Update existing
       await pool.execute(
         `UPDATE module_settings 
-         SET client_menus = ?, employee_menus = ?, module_permissions = ?, updated_at = NOW()
+         SET employee_menus = ?, module_permissions = ?, updated_at = NOW()
          WHERE company_id = ?`,
         [
-          JSON.stringify(finalClientMenus),
           JSON.stringify(finalEmployeeMenus),
           JSON.stringify(filteredPermissions),
           companyId
@@ -281,11 +228,10 @@ const updateModuleSettings = async (req, res) => {
     } else {
       // Insert new
       await pool.execute(
-        `INSERT INTO module_settings (company_id, client_menus, employee_menus, module_permissions)
-         VALUES (?, ?, ?, ?)`,
+        `INSERT INTO module_settings (company_id, employee_menus, module_permissions)
+         VALUES (?, ?, ?)`,
         [
           companyId,
-          JSON.stringify(finalClientMenus),
           JSON.stringify(finalEmployeeMenus),
           JSON.stringify(filteredPermissions)
         ]
@@ -306,7 +252,6 @@ const updateModuleSettings = async (req, res) => {
       data: {
         id: settings.id,
         company_id: settings.company_id,
-        client_menus: finalClientMenus,
         employee_menus: finalEmployeeMenus,
         module_permissions: filteredPermissions,
         updated_at: settings.updated_at,
@@ -351,8 +296,7 @@ const resetModuleSettings = async (req, res) => {
       message: 'Module settings reset to defaults',
       data: {
         company_id: parseInt(companyId),
-        client_menus: DEFAULT_CLIENT_MENUS,
-        employee_menus: DEFAULT_EMPLOYEE_MENUS,
+          employee_menus: DEFAULT_EMPLOYEE_MENUS,
       }
     });
 
@@ -370,7 +314,6 @@ module.exports = {
   getModuleSettings,
   updateModuleSettings,
   resetModuleSettings,
-  DEFAULT_CLIENT_MENUS,
   DEFAULT_EMPLOYEE_MENUS,
 };
 

@@ -879,11 +879,21 @@ const getDashboardStats = async (req, res) => {
       [companyId, today]
     );
 
+    // Nuclear Cleanup: Mark any message older than 30 days as read automatically to keep dashboard clean
+    await safeQuery(
+      `UPDATE messages SET is_read = 1, read_at = NOW() 
+       WHERE to_user_id = ? AND is_read = 0 AND created_at < DATE_SUB(NOW(), INTERVAL 30 DAY)`,
+      [userId]
+    );
+
     // Unread messages
     const unreadMessages = await safeQuery(
-      `SELECT COUNT(*) as total FROM messages
-       WHERE to_user_id = ? AND company_id = ? AND is_read = 0 AND is_deleted = 0`,
-      [userId, companyId]
+      `SELECT (SELECT COUNT(*) FROM messages WHERE to_user_id = ? AND is_read = 0 AND is_deleted = 0 AND group_id IS NULL)
+              +
+              (SELECT COUNT(*) FROM message_recipients mr 
+               JOIN messages m ON mr.message_id = m.id
+               WHERE mr.user_id = ? AND mr.is_read = 0 AND m.is_deleted = 0) as total`,
+      [userId, userId]
     );
 
     // My Documents count
@@ -891,6 +901,58 @@ const getDashboardStats = async (req, res) => {
       `SELECT COUNT(*) as total FROM documents
        WHERE company_id = ? AND uploaded_by = ? AND is_deleted = 0`,
       [companyId, userId]
+    );
+
+    // CRM Statistics
+    const myLeadsCount = await safeQuery(
+      `SELECT COUNT(*) as total FROM leads
+       WHERE company_id = ? AND (assigned_to = ? OR created_by = ?) AND is_deleted = 0`,
+      [companyId, userId, userId]
+    );
+
+    const myDealsCount = await safeQuery(
+      `SELECT COUNT(*) as total FROM deals
+       WHERE company_id = ? AND (assigned_to = ? OR created_by = ?) AND is_deleted = 0`,
+      [companyId, userId, userId]
+    );
+    
+    const myDealsValue = await safeQuery(
+      `SELECT COALESCE(SUM(total), 0) as total FROM deals
+       WHERE company_id = ? AND (assigned_to = ? OR created_by = ?) AND is_deleted = 0`,
+      [companyId, userId, userId]
+    );
+
+    const myOffersCount = await safeQuery(
+      `SELECT COUNT(*) as total FROM estimates
+       WHERE company_id = ? AND (assigned_to = ? OR created_by = ?) AND is_deleted = 0`,
+      [companyId, userId, userId]
+    );
+
+    const myInvoicesCount = await safeQuery(
+      `SELECT COUNT(*) as total FROM invoices
+       WHERE company_id = ? AND (assigned_to = ? OR created_by = ?) AND is_deleted = 0`,
+      [companyId, userId, userId]
+    );
+
+    // Leads by source (for my leads)
+    const leadsBySource = await safeQuery(
+      `SELECT COALESCE(NULLIF(TRIM(source), ''), 'Others') as source, COUNT(*) as count 
+       FROM leads 
+       WHERE company_id = ? AND (assigned_to = ? OR created_by = ?) AND is_deleted = 0 
+       GROUP BY COALESCE(NULLIF(TRIM(source), ''), 'Others')`,
+      [companyId, userId, userId],
+      []
+    );
+
+    // Pipeline stages (for my deals)
+    const pipelineStages = await safeQuery(
+      `SELECT ds.name as stage, COALESCE(SUM(d.total), 0) as value, COUNT(*) as deals 
+       FROM deals d
+       JOIN deal_pipeline_stages ds ON d.stage_id = ds.id
+       WHERE d.company_id = ? AND (d.assigned_to = ? OR d.created_by = ?) AND d.is_deleted = 0 
+       GROUP BY ds.name`,
+      [companyId, userId, userId],
+      []
     );
 
     // Calculate attendance percentage
@@ -911,7 +973,22 @@ const getDashboardStats = async (req, res) => {
         leave_requests: leaveRequestsCount,
         upcoming_events: upcomingEvents[0]?.total || 0,
         unread_messages: unreadMessages[0]?.total || 0,
-        my_documents: documentsCount[0]?.total || 0
+        my_documents: documentsCount[0]?.total || 0,
+        my_leads: myLeadsCount[0]?.total || 0,
+        my_deals: myDealsCount[0]?.total || 0,
+        my_deals_value: myDealsValue[0]?.total || 0,
+        my_offers: myOffersCount[0]?.total || 0,
+        my_invoices: myInvoicesCount[0]?.total || 0,
+        leads_by_source: leadsBySource.map(r => ({
+          source: r.source,
+          count: r.count,
+          percentage: myLeadsCount[0]?.total > 0 ? Math.round((r.count / myLeadsCount[0].total) * 100) : 0
+        })),
+        pipeline_stages: pipelineStages.map(r => ({
+          stage: r.stage,
+          value: parseFloat(r.value || 0),
+          deals: r.deals || 0
+        }))
       }
     });
   } catch (error) {

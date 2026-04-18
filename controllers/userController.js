@@ -3,7 +3,13 @@ const bcrypt = require('bcryptjs');
 
 const getAll = async (req, res) => {
   try {
-    const companyId = req.query.company_id || req.body.company_id || 1;
+    const userRole = req.user.role?.toUpperCase();
+    let companyId = req.companyId;
+
+    // SuperAdmin can specify company_id to see other companies
+    if (userRole === 'SUPERADMIN' && (req.query.company_id || req.body.company_id)) {
+      companyId = req.query.company_id || req.body.company_id;
+    }
     
     const whereClause = 'WHERE company_id = ? AND is_deleted = 0';
     const params = [companyId];

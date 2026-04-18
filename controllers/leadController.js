@@ -152,6 +152,7 @@ const getAll = async (req, res) => {
       whereClause += ' AND l.status = ?';
       params.push(status);
     }
+    // ALL ROLES see all leads in company (Admin logic applied to Employee)
     if (owner_id) {
       whereClause += ' AND l.owner_id = ?';
       params.push(owner_id);
@@ -251,8 +252,7 @@ const getById = async (req, res) => {
         error: 'company_id is required'
       });
     }
-    const [leads] = await pool.execute(
-      `SELECT l.*, 
+    let query = `SELECT l.*, 
               u.name as owner_name, 
               u.email as owner_email, 
               c.name as company_name,
@@ -264,9 +264,13 @@ const getById = async (req, res) => {
        LEFT JOIN companies c ON l.company_id = c.id
        LEFT JOIN lead_pipeline_stages ls ON l.stage_id = ls.id
        LEFT JOIN lead_pipelines lp ON l.pipeline_id = lp.id
-       WHERE l.id = ? AND l.company_id = ? AND l.is_deleted = 0`,
-      [id, companyId]
-    );
+       WHERE l.id = ? AND l.company_id = ? AND l.is_deleted = 0`;
+
+    const queryParams = [id, companyId];
+
+    // Removed employee ownership restriction to allow full visibility
+
+    const [leads] = await pool.execute(query, queryParams);
 
     if (leads.length === 0) {
       return res.status(404).json({
@@ -554,16 +558,20 @@ const update = async (req, res) => {
 
     // Check if lead exists
     const [leads] = await pool.execute(
-      `SELECT id FROM leads WHERE id = ? AND company_id = ? AND is_deleted = 0`,
+      `SELECT id, owner_id FROM leads WHERE id = ? AND company_id = ? AND is_deleted = 0`,
       [id, companyId]
     );
 
     if (leads.length === 0) {
       return res.status(404).json({
         success: false,
-        error: 'Lead not found'
+        error: 'Lead not found or access denied'
       });
     }
+
+    // Removed employee update restriction to allow admin-like actions if user is allowed navigate here
+    const isEmployee = req.user && req.user.role === 'EMPLOYEE';
+    // If we want to keep some restriction, we can check if they are in the same company (already checked above)
 
     // Build update query
     const allowedFields = [
@@ -745,6 +753,14 @@ const deleteLead = async (req, res) => {
   try {
     const { id } = req.params;
 
+    // IF EMPLOYEE - Block deletion
+    if (req.user && req.user.role === 'EMPLOYEE') {
+      return res.status(403).json({
+        success: false,
+        error: 'Access denied. Employees cannot delete leads.'
+      });
+    }
+
     const companyId = req.companyId || req.query.company_id || 1;
     const [result] = await pool.execute(
       `UPDATE leads SET is_deleted = 1, updated_at = CURRENT_TIMESTAMP
@@ -768,183 +784,6 @@ const deleteLead = async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to delete lead'
-    });
-  }
-};
-
-/**
- * Convert lead to client
- * POST /api/v1/leads/:id/convert-to-client
- */
-const convertToClient = async (req, res) => {
-  const connection = await pool.getConnection();
-  await connection.beginTransaction();
-
-  try {
-    const { id } = req.params;
-
-    // Destructure properties and default to null so that we never pass undefined to SQL
-    const {
-      companyName = null,
-      email = null,
-      password = null,
-      address = null,
-      city = null,
-      state = null,
-      zip = null,
-      country = 'United States',
-      phoneCountryCode = '+1',
-      phoneNumber = null,
-      website = null,
-      vatNumber = null,
-      gstNumber = null,
-      currency = 'USD',
-      currencySymbol = '$',
-      disableOnlinePayment = 0
-    } = req.body;
-
-    // Ensure company_id is properly parsed as integer
-    const companyId = parseInt(req.companyId || req.query.company_id || req.body.company_id || 0, 10);
-
-    // company_id is required
-    if (!companyId || isNaN(companyId) || companyId <= 0) {
-      await connection.rollback();
-      connection.release();
-      return res.status(400).json({
-        success: false,
-        error: 'company_id is required'
-      });
-    }
-
-    // Get lead to verify existence
-    const [leads] = await connection.execute(
-      `SELECT * FROM leads WHERE id = ? AND company_id = ? AND is_deleted = 0`,
-      [id, companyId]
-    );
-
-    if (leads.length === 0) {
-      await connection.rollback();
-      connection.release();
-      return res.status(404).json({
-        success: false,
-        error: 'Lead not found'
-      });
-    }
-
-    const lead = leads[0];
-
-    // Validate strictly required fields
-    if (!companyName || !email || !password) {
-      await connection.rollback();
-      connection.release();
-      return res.status(400).json({
-        success: false,
-        error: 'Company Name, Email and Password are required'
-      });
-    }
-
-    // Check if user already exists
-    const [existingUsers] = await connection.execute(
-      `SELECT id FROM users WHERE email = ? AND company_id = ?`,
-      [email, companyId]
-    );
-
-    let ownerId;
-
-    if (existingUsers.length > 0) {
-      ownerId = existingUsers[0].id;
-    } else {
-      // Create user account first
-      // Note: bcrypt must be initialized/imported
-      const hashedPassword = await bcrypt.hash(password, 10);
-      const [userResult] = await connection.execute(
-        `INSERT INTO users (company_id, name, email, password, role, status)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          companyId,
-          companyName,
-          email,
-          hashedPassword,
-          'CLIENT',
-          'Active'
-        ]
-      );
-      ownerId = userResult.insertId;
-    }
-
-    // Create client
-    const [clientResult] = await connection.execute(
-      `INSERT INTO clients (
-        company_id, company_name, owner_id, address, city, state, zip, country,
-        phone_country_code, phone_number, website, vat_number, gst_number,
-        currency, currency_symbol, disable_online_payment, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        companyId,
-        companyName,
-        ownerId,
-        address || lead.address || null,
-        city || lead.city || null,
-        state || lead.state || null,
-        zip || lead.zip || null,
-        country || lead.country || 'United States',
-        phoneCountryCode || '+1',
-        phoneNumber || lead.phone || null,
-        website || null,
-        vatNumber || null,
-        gstNumber || null,
-        currency || 'USD',
-        currencySymbol || '$',
-        disableOnlinePayment || 0,
-        'Active'
-      ]
-    );
-
-    const clientId = clientResult.insertId;
-
-    // Create primary contact
-    // Determine contact name safely
-    const contactName = lead.person_name || companyName || 'Contact';
-    const contactPhone = phoneNumber || lead.phone || null;
-
-    if (contactName) {
-      await connection.execute(
-        `INSERT INTO client_contacts (
-          client_id, name, job_title, email, phone, is_primary
-        ) VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          clientId,
-          contactName,
-          null, // job_title is explicitly null
-          email,
-          contactPhone,
-          1
-        ]
-      );
-    }
-
-    // Update lead status to 'Won'
-    await connection.execute(
-      `UPDATE leads SET status = 'Won', updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-      [id]
-    );
-
-    await connection.commit();
-    connection.release();
-
-    res.json({
-      success: true,
-      data: { client_id: clientId },
-      message: 'Lead converted to client successfully'
-    });
-  } catch (error) {
-    if (connection) await connection.rollback();
-    if (connection) connection.release();
-    console.error('Convert lead error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to convert lead to client',
-      details: error.message
     });
   }
 };
@@ -2037,7 +1876,6 @@ module.exports = {
   create,
   update,
   deleteLead,
-  convertToClient,
   getOverview,
   updateStatus,
   updateLeadLabels,

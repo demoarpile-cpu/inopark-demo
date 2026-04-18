@@ -7,7 +7,13 @@ const router = express.Router();
 const leadController = require('../controllers/leadController');
 const leadCallsController = require('../controllers/leadCallsController');
 
-// No authentication required - all routes are public
+// Authentication required - secure all routes
+const { verifyToken } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/permissions');
+
+// Apply verifyToken to all lead routes
+router.use(verifyToken);
+
 
 // IMPORTANT: Specific routes must come BEFORE parameterized routes (/:id)
 // Otherwise Express will match /contacts as /:id with id="contacts"
@@ -37,7 +43,6 @@ router.post('/import', leadController.importLeads);
 
 // Parameterized routes (must come after specific routes)
 // More specific routes should come before less specific ones
-router.post('/:id/convert-to-client', leadController.convertToClient);
 router.put('/:id/update-status', leadController.updateStatus);
 router.put('/:id/labels', leadController.updateLeadLabels);
 router.get('/', leadController.getAll);

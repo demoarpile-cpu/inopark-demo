@@ -49,8 +49,8 @@ const getModuleFromPath = (path, method) => {
 const mapModuleNameToKey = (moduleName, userRole) => {
   // Module name mapping
   const moduleMap = {
-    'tasks': userRole === 'CLIENT' ? 'tasks' : 'myTasks',
-    'projects': userRole === 'CLIENT' ? 'projects' : 'myProjects',
+    'tasks': 'myTasks',
+    'projects': 'myProjects',
     'time_tracking': 'timeTracking',
     'time-tracking': 'timeTracking',
     'leaves': 'leaveRequests',
@@ -126,7 +126,7 @@ const checkPermission = (permissionType, module) => {
 
       // First check if module is enabled in module_settings
       const [moduleSettings] = await pool.execute(
-        'SELECT client_menus, employee_menus, module_permissions FROM module_settings WHERE company_id = ?',
+        'SELECT employee_menus, module_permissions FROM module_settings WHERE company_id = ?',
         [companyId]
       );
 
@@ -137,11 +137,7 @@ const checkPermission = (permissionType, module) => {
         let modulePerms = {};
 
         try {
-          if (settings.client_menus) {
-            clientMenus = typeof settings.client_menus === 'string'
-              ? JSON.parse(settings.client_menus)
-              : settings.client_menus;
-          }
+
           if (settings.employee_menus) {
             employeeMenus = typeof settings.employee_menus === 'string'
               ? JSON.parse(settings.employee_menus)
@@ -160,9 +156,7 @@ const checkPermission = (permissionType, module) => {
         const moduleKey = mapModuleNameToKey(moduleName, userRole);
 
         // Check if module is enabled
-        const isModuleEnabled = userRole === 'CLIENT'
-          ? clientMenus[moduleKey] !== false
-          : employeeMenus[moduleKey] !== false;
+        const isModuleEnabled = employeeMenus[moduleKey] !== false;
 
         if (!isModuleEnabled) {
           return res.status(403).json({
@@ -279,7 +273,7 @@ const requirePermission = (module = null) => {
       const companyId = req.companyId || req.query.company_id || req.body.company_id || 1;
 
       // System roles (CLIENT, EMPLOYEE) don't need role_id lookup
-      const systemRoles = ['SUPERADMIN', 'ADMIN', 'CLIENT', 'EMPLOYEE'];
+      const systemRoles = ['SUPERADMIN', 'ADMIN', 'EMPLOYEE'];
       let roleId = null;
 
       if (!systemRoles.includes(userRole)) {
@@ -300,7 +294,7 @@ const requirePermission = (module = null) => {
 
       // First check if module is enabled in module_settings
       const [moduleSettings] = await pool.execute(
-        'SELECT client_menus, employee_menus, module_permissions FROM module_settings WHERE company_id = ?',
+        'SELECT employee_menus, module_permissions FROM module_settings WHERE company_id = ?',
         [companyId]
       );
 
@@ -311,11 +305,7 @@ const requirePermission = (module = null) => {
         let modulePerms = {};
 
         try {
-          if (settings.client_menus) {
-            clientMenus = typeof settings.client_menus === 'string'
-              ? JSON.parse(settings.client_menus)
-              : settings.client_menus;
-          }
+
           if (settings.employee_menus) {
             employeeMenus = typeof settings.employee_menus === 'string'
               ? JSON.parse(settings.employee_menus)
@@ -334,9 +324,7 @@ const requirePermission = (module = null) => {
         const moduleKey = mapModuleNameToKey(moduleName, userRole);
 
         // Check if module is enabled
-        const isModuleEnabled = userRole === 'CLIENT'
-          ? clientMenus[moduleKey] !== false
-          : employeeMenus[moduleKey] !== false;
+        const isModuleEnabled = employeeMenus[moduleKey] !== false;
 
         if (!isModuleEnabled) {
           return res.status(403).json({

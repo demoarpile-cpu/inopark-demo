@@ -12,7 +12,9 @@ const { validateSettings, sanitizeValue } = require('../utils/settingsValidator'
 const getAllSettings = async (companyId) => {
   try {
     const [settings] = await pool.execute(
-      `SELECT * FROM system_settings WHERE company_id = ? OR company_id IS NULL ORDER BY setting_key`,
+      `SELECT * FROM system_settings 
+       WHERE company_id = ? OR company_id IS NULL 
+       ORDER BY setting_key, company_id ASC`,
       [companyId]
     );
     return settings;
@@ -30,7 +32,7 @@ const getSettingsByCategory = async (category, companyId) => {
       `SELECT * FROM system_settings
        WHERE (company_id = ? OR company_id IS NULL)
        AND setting_key LIKE ?
-       ORDER BY setting_key`,
+       ORDER BY setting_key, company_id ASC`,
       [companyId, `${category}%`]
     );
     return settings;
@@ -47,6 +49,7 @@ const getSetting = async (key, companyId) => {
     const [settings] = await pool.execute(
       `SELECT setting_value FROM system_settings
        WHERE setting_key = ? AND (company_id = ? OR company_id IS NULL)
+       ORDER BY company_id DESC
        LIMIT 1`,
       [key, companyId]
     );
@@ -203,7 +206,28 @@ const applySettingChange = async (key, value, companyId) => {
 
     // PWA configuration
     if (key === 'pwa_enabled' && value) {
-      await generatePWAManifest(companyId);
+      await generatePWAManifest(companyId)
+    }
+
+    // Sync company info if settings change
+    if (companyId) {
+      const companyFieldsMapping = {
+        'company_logo': 'logo',
+        'company_name': 'name',
+        'company_email': 'email',
+        'company_phone': 'phone',
+        'company_website': 'website',
+        'company_address': 'address'
+      }
+
+      const companyField = companyFieldsMapping[key]
+      if (companyField) {
+        await pool.execute(
+          `UPDATE companies SET ${companyField} = ?, updated_at = NOW() WHERE id = ?`,
+          [value, companyId]
+        )
+        console.log(`Synced ${key} to companies.${companyField} for company ${companyId}`)
+      }
     }
 
     return true;
@@ -373,7 +397,7 @@ const getDefaultSettings = () => {
 
     // Modules (all enabled by default)
     { setting_key: 'module_leads', setting_value: 'true' },
-    { setting_key: 'module_clients', setting_value: 'true' },
+
     { setting_key: 'module_projects', setting_value: 'true' },
     { setting_key: 'module_tasks', setting_value: 'true' },
     { setting_key: 'module_invoices', setting_value: 'true' },
@@ -419,11 +443,6 @@ const getDefaultSettings = () => {
     // Access Permission
     { setting_key: 'default_role', setting_value: 'employee' },
     { setting_key: 'enable_two_factor', setting_value: 'false' },
-
-    // Client Portal
-    { setting_key: 'client_portal_enabled', setting_value: 'true' },
-    { setting_key: 'client_can_view_invoices', setting_value: 'true' },
-    { setting_key: 'client_can_view_projects', setting_value: 'true' },
 
     // Sales & Prospects
     { setting_key: 'auto_convert_lead', setting_value: 'false' },
