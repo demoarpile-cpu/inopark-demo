@@ -26,6 +26,9 @@ router.get('/employee', requireRole([ROLES.SUPERADMIN, ROLES.ADMIN, ROLES.EMPLOY
 // Generic dashboard - redirects based on role
 router.get('/', dashboardController.getCompleteDashboard);
 
+// Module settings - tells frontend which modules are enabled
+router.get('/module-settings', dashboardController.getModuleSettings);
+
 // Todo endpoints (user-specific)
 router.post('/todo', dashboardController.saveTodo);
 router.put('/todo/:id', dashboardController.updateTodo);
