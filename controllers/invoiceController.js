@@ -115,17 +115,21 @@ const getAll = async (req, res) => {
   try {
     const { status, client_id, search, start_date, end_date, project_id } = req.query;
 
-    // Use company_id from auth token or query param
-    const filterCompanyId = req.companyId || req.query.company_id || null;
+    const rawCompany = req.query.company_id ?? req.companyId;
+    const filterCompanyId =
+      rawCompany != null && rawCompany !== ''
+        ? parseInt(String(rawCompany), 10)
+        : null;
 
-    let whereClause = 'WHERE i.is_deleted = 0';
-    const params = [];
-
-    // Filter by company_id only if provided
-    if (filterCompanyId) {
-      whereClause += ' AND i.company_id = ?';
-      params.push(filterCompanyId);
+    if (!filterCompanyId || Number.isNaN(filterCompanyId) || filterCompanyId <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: req.t ? req.t('api_msg_e1be2bab') : 'company_id is required'
+      });
     }
+
+    let whereClause = 'WHERE i.is_deleted = 0 AND i.company_id = ?';
+    const params = [filterCompanyId];
 
     // Status filter
     if (status && status !== 'All' && status !== 'all') {
@@ -182,20 +186,19 @@ const getAll = async (req, res) => {
       params.push(end_date);
     }
 
-    // Get all invoices without pagination
+    // paid_amount via subquery avoids GROUP BY + ONLY_FULL_GROUP_BY failures (pool would return [] silently)
     const [invoices] = await pool.execute(
-      `SELECT i.*, 
-       c.company_name as client_name, 
-       comp.name as company_name, 
+      `SELECT i.*,
+       c.company_name AS client_name,
+       comp.name AS company_name,
        p.project_name,
-       COALESCE(SUM(pay.amount), 0) as paid_amount
+       (SELECT COALESCE(SUM(pay.amount), 0) FROM payments pay
+         WHERE pay.invoice_id = i.id AND pay.is_deleted = 0) AS paid_amount
        FROM invoices i
        LEFT JOIN clients c ON i.client_id = c.id
        LEFT JOIN companies comp ON i.company_id = comp.id
        LEFT JOIN projects p ON i.project_id = p.id
-       LEFT JOIN payments pay ON pay.invoice_id = i.id AND pay.is_deleted = 0
        ${whereClause}
-       GROUP BY i.id
        ORDER BY i.created_at DESC`,
       params
     );
@@ -570,7 +573,7 @@ const create = async (req, res) => {
       );
     }
 
-    await customFieldService.saveCustomFields(effectiveCompanyId, 'Invoices', invoiceId, custom_fields);
+    await customFieldService.saveCustomFields(companyIdNum, 'Invoices', invoiceId, custom_fields);
 
     // Get created invoice
     const [invoices] = await pool.execute(
