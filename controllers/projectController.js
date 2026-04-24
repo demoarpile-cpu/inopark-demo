@@ -5,6 +5,63 @@
 const pool = require('../config/db');
 const customFieldService = require('../services/customFieldService');
 
+/** YYYY-MM-DD for MySQL DATE; invalid input falls back to today */
+const toMysqlDate = (val) => {
+  if (val == null || val === '') {
+    return new Date().toISOString().slice(0, 10);
+  }
+  if (val instanceof Date && !Number.isNaN(val.getTime())) {
+    return val.toISOString().slice(0, 10);
+  }
+  const s = String(val).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+    return s.slice(0, 10);
+  }
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) {
+    return new Date().toISOString().slice(0, 10);
+  }
+  return d.toISOString().slice(0, 10);
+};
+
+/** Map UI / legacy status strings to projects.status ENUM */
+const normalizeProjectStatus = (input) => {
+  if (input == null || input === '') return 'in progress';
+  const s = String(input).toLowerCase().trim();
+  const map = {
+    'in bearbeitung': 'in progress',
+    'in progress': 'in progress',
+    'not started': 'in progress',
+    'open': 'in progress',
+    'completed': 'completed',
+    'finished': 'completed',
+    'on hold': 'on hold',
+    'on_hold': 'on hold',
+    'cancelled': 'cancelled',
+    'canceled': 'cancelled',
+  };
+  if (map[s]) return map[s];
+  if (['in progress', 'completed', 'on hold', 'cancelled'].includes(s)) return s;
+  return 'in progress';
+};
+
+const serializeProjectRow = (project) => {
+  if (!project) return project;
+  const d = (v) => {
+    if (v == null || v === '') return v;
+    if (v instanceof Date) return v.toISOString().split('T')[0];
+    const str = String(v);
+    if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.split('T')[0].slice(0, 10);
+    const t = new Date(str);
+    return Number.isNaN(t.getTime()) ? null : t.toISOString().split('T')[0];
+  };
+  return {
+    ...project,
+    start_date: d(project.start_date),
+    deadline: project.deadline == null || project.deadline === '' ? null : d(project.deadline),
+  };
+};
+
 /**
  * Get all projects
  * GET /api/v1/projects
@@ -46,17 +103,20 @@ const getAll = async (req, res) => {
     let whereClause = 'WHERE p.company_id = ? AND p.is_deleted = 0';
     const params = [filterCompanyId];
 
-    // Status filter
+    // Status filter (UI also sends open, completed, upcoming; high_priority uses `priority` param)
     if (status && status !== 'All Projects' && status !== 'all') {
-      if (status === 'Open Projects') {
-        whereClause += ' AND (p.status = ? OR p.status = ?)';
-        params.push('in progress', 'open');
-      } else if (status === 'Completed') {
-        whereClause += ' AND p.status = ?';
+      const st = String(status).toLowerCase();
+      if (st === 'open' || st === 'open projects') {
+        whereClause += ` AND (
+          LOWER(TRIM(p.status)) IN ('in progress','open','not started')
+          OR p.status IS NULL
+        )`;
+      } else if (st === 'completed') {
+        whereClause += ' AND LOWER(TRIM(p.status)) = ?';
         params.push('completed');
-      } else {
-        whereClause += ' AND p.status = ?';
-        params.push(status.toLowerCase());
+      } else if (st !== 'high_priority') {
+        whereClause += ' AND LOWER(TRIM(p.status)) = ?';
+        params.push(normalizeProjectStatus(status));
       }
     }
 
@@ -195,16 +255,6 @@ const getAll = async (req, res) => {
       params
     );
 
-    // Permanent Dummy Fallback: If DB is empty, show high-quality demo projects
-    if (projects.length === 0) {
-      const demoProjects = [
-        { id: 101, project_name: "Innopark Mobile CRM", short_code: "DEMO-01", client_name: "Innopark Global", status: "in progress", progress: 65, deadline: "2026-12-31", budget: 25000, project_type: "Client Project", created_at: new Date() },
-        { id: 102, project_name: "Lead Generation Portal", short_code: "DEMO-02", client_name: "Kiaan Tech", status: "open", progress: 30, deadline: "2026-11-15", budget: 15000, project_type: "Client Project", created_at: new Date() },
-        { id: 103, project_name: "Security Audit 2025", short_code: "DEMO-03", client_name: "Nexus Solutions", status: "completed", progress: 100, deadline: "2025-05-10", budget: 8500, project_type: "Internal Project", created_at: new Date() }
-      ];
-      return res.json({ success: true, data: demoProjects });
-    }
-
     // Get members and custom fields for each project
     for (let project of projects) {
       const [members] = await pool.execute(
@@ -216,8 +266,10 @@ const getAll = async (req, res) => {
       project.members = members;
 
       project.custom_fields = await customFieldService.getCustomFieldsWithValues(filterCompanyId, 'Projects', project.id);
+      Object.assign(project, serializeProjectRow(project));
     }
 
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.json({
       success: true,
       data: projects
@@ -406,8 +458,9 @@ const create = async (req, res) => {
     // Generate short_code if not provided
     const projectShortCode = short_code || await generateShortCode(company_id);
 
-    // Get default start date if not provided
-    const projectStartDate = start_date || new Date().toISOString().split('T')[0];
+    const projectStartDate = toMysqlDate(start_date);
+    const deadlineValue = (no_deadline || !deadline) ? null : toMysqlDate(deadline);
+    const statusValue = normalizeProjectStatus(status);
 
     // Insert project
     const [result] = await pool.execute(
@@ -418,11 +471,11 @@ const create = async (req, res) => {
         task_approval, label, status, progress, created_by, price
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        company_id ?? null, projectShortCode, project_name || null, description || null, projectStartDate, deadline || null,
+        company_id ?? null, projectShortCode, project_name || null, description || null, projectStartDate, deadlineValue,
         no_deadline || 0, budget || null, project_category || null, project_sub_category || null,
         department_id || null, validClientId || null, validManagerId || null, project_summary || null, notes || null,
         public_gantt_chart || 'enable', public_task_board || 'enable',
-        task_approval || 'disable', label || null, status || 'not started',
+        task_approval || 'disable', label || null, statusValue,
         progress || 0, createdByUserId || req.userId || req.user?.id || validManagerId || 1, price || budget || 0
       ]
     );
@@ -460,7 +513,7 @@ const create = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      data: projects[0],
+      data: projects[0] ? serializeProjectRow(projects[0]) : null,
       message: req.t ? req.t('api_msg_5c15a40e') : "Project created successfully"
     });
   } catch (error) {

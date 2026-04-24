@@ -240,6 +240,7 @@ const getAll = async (req, res) => {
       invoice.custom_fields = await customFieldService.getCustomFieldsWithValues(filterCompanyId, 'Invoices', invoice.id);
     }
 
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.json({
       success: true,
       data: invoices
@@ -254,6 +255,7 @@ const getAll = async (req, res) => {
       { id: 304, invoice_number: "INV#004", client_name: "Alpha Corp", bill_date: "2026-04-20", total: 12000, paid_amount: 0, due_amount: 12000, status: "Unpaid", project_name: "Cloud Hosting", created_at: new Date() },
       { id: 305, invoice_number: "INV#005", client_name: "DataStream", bill_date: "2026-04-05", total: 8500, paid_amount: 8500, due_amount: 0, status: "Fully Paid", project_name: "Security Audit", created_at: new Date() }
     ];
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.json({
       success: true,
       data: mockInvoices
