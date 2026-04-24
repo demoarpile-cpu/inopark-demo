@@ -104,6 +104,7 @@ const getModuleSettings = async (req, res) => {
         data: {
           company_id: parseInt(companyId),
           employee_menus: DEFAULT_EMPLOYEE_MENUS,
+          module_permissions: {},
         }
       });
     }

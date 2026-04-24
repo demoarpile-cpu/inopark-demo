@@ -90,10 +90,14 @@ const getAll = async (req, res) => {
       progress_max
     } = req.query;
 
-    // Use company_id from auth token (req.companyId), query param, or body
-    const filterCompanyId = req.companyId || company_id || null;
+    // company_id from query/body (string or number from Express)
+    const rawCompany = company_id ?? req.companyId ?? req.body?.company_id;
+    const filterCompanyId =
+      rawCompany != null && rawCompany !== ''
+        ? parseInt(String(rawCompany), 10)
+        : null;
 
-    if (!filterCompanyId) {
+    if (!filterCompanyId || Number.isNaN(filterCompanyId) || filterCompanyId <= 0) {
       return res.status(400).json({
         success: false,
         error: req.t ? req.t('api_msg_e1be2bab') : "company_id is required"
