@@ -110,28 +110,60 @@ const getAll = async (req, res) => {
     query += ' ORDER BY t.due_date ASC LIMIT ? OFFSET ?';
     params.push(limitNum, offset);
 
-    // pool.query: on SQL error db.js returns [] silently — add fallback if join query returns nothing
-    let [rows] = await pool.query(query, params);
+    let rows = [];
+    try {
+      [rows] = await pool.query(query, params);
+    } catch (e) {
+      console.warn('⚠️ Primary task query failed, trying fallbacks...', e.message);
+    }
+
     if (!Array.isArray(rows) || rows.length === 0) {
-      const simpleSql = `SELECT t.*, NULL AS assigned_to_name, NULL AS assigned_to_avatar, NULL AS created_by_name, NULL AS related_entity_name, NULL AS project_name
-        FROM tasks t
-        WHERE t.company_id = ? AND t.is_deleted = 0
-        ORDER BY t.due_date ASC
-        LIMIT ? OFFSET ?`;
-      const [simpleRows] = await pool.query(simpleSql, [companyId, limitNum, offset]);
-      if (Array.isArray(simpleRows) && simpleRows.length > 0) {
+      // Level 1 Fallback: Simple query with is_deleted
+      try {
+        const simpleSql = `SELECT t.*, NULL AS assigned_to_name, NULL AS assigned_to_avatar, NULL AS created_by_name, NULL AS related_entity_name, NULL AS project_name
+          FROM tasks t
+          WHERE t.company_id = ? AND t.is_deleted = 0
+          ORDER BY t.due_date ASC
+          LIMIT ? OFFSET ?`;
+        const [simpleRows] = await pool.query(simpleSql, [companyId, limitNum, offset]);
         rows = simpleRows;
+      } catch (e1) {
+        console.warn('⚠️ Task fallback Level 1 failed:', e1.message);
+        // Level 2 Fallback: Simple query WITHOUT is_deleted
+        try {
+          const s2Sql = `SELECT t.*, NULL AS assigned_to_name, NULL AS assigned_to_avatar, NULL AS created_by_name, NULL AS related_entity_name, NULL AS project_name
+            FROM tasks t
+            WHERE t.company_id = ?
+            ORDER BY t.due_date ASC
+            LIMIT ? OFFSET ?`;
+          const [s2Rows] = await pool.query(s2Sql, [companyId, limitNum, offset]);
+          rows = s2Rows;
+        } catch (e2) {
+          console.error('❌ All task fallbacks failed:', e2.message);
+          throw e2;
+        }
       }
     }
 
     // Count for pagination metadata
-    const [countResult] = await pool.query('SELECT COUNT(*) as total FROM tasks WHERE company_id = ? AND is_deleted = 0', [companyId]);
+    let total = 0;
+    try {
+      const [countResult] = await pool.query('SELECT COUNT(*) as total FROM tasks WHERE company_id = ? AND is_deleted = 0', [companyId]);
+      total = countResult[0]?.total || 0;
+    } catch (e) {
+      try {
+        const [countResult] = await pool.query('SELECT COUNT(*) as total FROM tasks WHERE company_id = ?', [companyId]);
+        total = countResult[0]?.total || 0;
+      } catch (e2) {
+        total = Array.isArray(rows) ? rows.length : 0;
+      }
+    }
 
     res.json({
       success: true,
       data: Array.isArray(rows) ? rows : [],
       pagination: {
-        total: countResult[0]?.total || 0,
+        total: total,
         page: pageNum,
         limit: limitNum
       }

@@ -187,59 +187,62 @@ const getAll = async (req, res) => {
     }
 
     // Do NOT put payments in the main SELECT: if that subquery/table fails, db.js returns [] and the whole list is empty.
-    // Paid amounts are loaded after (batch) so list rows still return.
-    let [invoices] = await pool.execute(
-      `SELECT i.*,
-       c.company_name AS client_name,
-       comp.name AS company_name,
-       p.project_name
-       FROM invoices i
-       LEFT JOIN clients c ON i.client_id = c.id
-       LEFT JOIN companies comp ON i.company_id = comp.id
-       LEFT JOIN projects p ON i.project_id = p.id
-       ${whereClause}
-       ORDER BY i.id DESC`,
-      params
-    );
-
-    // If JOIN query failed silently (db pool swallows errors → []), load rows without JOINs
-    if (!invoices || invoices.length === 0) {
-      let [simple] = await pool.execute(
-        `SELECT * FROM invoices WHERE company_id = ? AND is_deleted = 0 ORDER BY id DESC LIMIT 500`,
-        [filterCompanyId]
+    // Paid amounts are loaded after (batch) so list rows still return.    let invoices = [];
+    try {
+      [invoices] = await pool.execute(
+        `SELECT i.*,
+         c.company_name AS client_name,
+         comp.name AS company_name,
+         p.project_name
+         FROM invoices i
+         LEFT JOIN clients c ON i.client_id = c.id
+         LEFT JOIN companies comp ON i.company_id = comp.id
+         LEFT JOIN projects p ON i.project_id = p.id
+         ${whereClause}
+         ORDER BY i.id DESC`,
+        params
       );
-      if (!simple || simple.length === 0) {
-        const [s2] = await pool.execute(
-          `SELECT * FROM invoices WHERE company_id = ? ORDER BY id DESC LIMIT 500`,
+    } catch (e) {
+      console.warn('⚠️ Primary invoice query failed, trying fallbacks...', e.message);
+    }
+
+    // If JOIN query failed (throws) or returned nothing, load rows without JOINs
+    if (!Array.isArray(invoices) || invoices.length === 0) {
+      // Level 1 Fallback: Simple query with is_deleted
+      try {
+        const [simple] = await pool.execute(
+          `SELECT * FROM invoices WHERE company_id = ? AND is_deleted = 0 ORDER BY id DESC LIMIT 500`,
           [filterCompanyId]
         );
-        simple = s2;
-      }
-      if (simple && simple.length > 0) {
-        invoices = simple;
-        for (const inv of invoices) {
-          if (inv.client_id) {
-            const [crows] = await pool.execute(
-              'SELECT company_name FROM clients WHERE id = ? LIMIT 1',
-              [inv.client_id]
-            );
-            inv.client_name = crows[0]?.company_name || null;
-          } else {
-            inv.client_name = null;
-          }
-          const [prows] = await pool.execute(
-            'SELECT name FROM companies WHERE id = ? LIMIT 1',
-            [inv.company_id]
+      } catch (e1) {
+        console.warn('⚠️ Level 1 fallback failed (likely is_deleted missing):', e1.message);
+        // Level 2 Fallback: Simple query WITHOUT is_deleted
+        try {
+          const [s2] = await pool.execute(
+            `SELECT * FROM invoices WHERE company_id = ? ORDER BY id DESC LIMIT 500`,
+            [filterCompanyId]
           );
-          inv.company_name = prows[0]?.name || null;
-          if (inv.project_id) {
-            const [pr] = await pool.execute(
-              'SELECT project_name FROM projects WHERE id = ? LIMIT 1',
-              [inv.project_id]
-            );
-            inv.project_name = pr[0]?.project_name || null;
-          } else {
-            inv.project_name = null;
+          invoices = s2;
+        } catch (e2) {
+          console.error('❌ All invoice fallbacks failed:', e2.message);
+          throw e2;
+        }
+      }
+
+      // Enrich simple query results with basic names if possible
+      if (Array.isArray(invoices) && invoices.length > 0) {
+        for (const inv of invoices) {
+          try {
+            if (inv.client_id) {
+              const [crows] = await pool.execute('SELECT company_name FROM clients WHERE id = ? LIMIT 1', [inv.client_id]);
+              inv.client_name = crows[0]?.company_name || null;
+            }
+            if (inv.project_id) {
+              const [pr] = await pool.execute('SELECT project_name FROM projects WHERE id = ? LIMIT 1', [inv.project_id]);
+              inv.project_name = pr[0]?.project_name || null;
+            }
+          } catch (err) {
+            // Ignore enrichment errors
           }
         }
       }
@@ -253,13 +256,24 @@ const getAll = async (req, res) => {
       const ids = invoices.map((row) => row.id).filter(Boolean);
       if (ids.length) {
         const ph = ids.map(() => '?').join(',');
-        const [paidRows] = await pool.execute(
-          `SELECT invoice_id, COALESCE(SUM(amount), 0) AS s
-           FROM payments
-           WHERE invoice_id IN (${ph}) AND is_deleted = 0
-           GROUP BY invoice_id`,
-          ids
-        );
+        let paidRows = [];
+        try {
+          const [res1] = await pool.execute(
+            `SELECT invoice_id, COALESCE(SUM(amount), 0) AS s FROM payments WHERE invoice_id IN (${ph}) AND is_deleted = 0 GROUP BY invoice_id`,
+            ids
+          );
+          paidRows = res1;
+        } catch (e1) {
+          try {
+            const [res2] = await pool.execute(
+              `SELECT invoice_id, COALESCE(SUM(amount), 0) AS s FROM payments WHERE invoice_id IN (${ph}) GROUP BY invoice_id`,
+              ids
+            );
+            paidRows = res2;
+          } catch (e2) {
+            console.warn('⚠️ Could not load payments:', e2.message);
+          }
+        }
         for (const pr of paidRows || []) {
           paidByInvoiceId.set(pr.invoice_id, parseFloat(pr.s || 0));
         }
@@ -296,11 +310,26 @@ const getAll = async (req, res) => {
       }
 
       // Check for credit notes
-      const [creditNotes] = await pool.execute(
-        `SELECT SUM(amount) as total_credit FROM credit_notes WHERE invoice_id = ? AND is_deleted = 0`,
-        [invoice.id]
-      );
-      if (creditNotes[0]?.total_credit > 0) {
+      let totalCredit = 0;
+      try {
+        const [cn] = await pool.execute(
+          `SELECT SUM(amount) as total_credit FROM credit_notes WHERE invoice_id = ? AND is_deleted = 0`,
+          [invoice.id]
+        );
+        totalCredit = cn[0]?.total_credit || 0;
+      } catch (e) {
+        try {
+          const [cn2] = await pool.execute(
+            `SELECT SUM(amount) as total_credit FROM credit_notes WHERE invoice_id = ?`,
+            [invoice.id]
+          );
+          totalCredit = cn2[0]?.total_credit || 0;
+        } catch (e2) {
+          // Ignore
+        }
+      }
+      invoice.total_credit_notes = totalCredit;
+      if (totalCredit > 0) {
         invoice.status = 'Credited';
       }
 
@@ -345,23 +374,41 @@ const getById = async (req, res) => {
       rawCid != null && rawCid !== '' ? parseInt(String(rawCid), 10) : null;
 
     // Same paid_amount pattern as getAll (no GROUP BY — avoids pool swallowing SQL errors / empty results)
-    const [invoices] = await pool.execute(
-      `SELECT i.*,
-       c.company_name AS client_name,
-       comp.name AS company_name,
-       p.project_name,
-       (SELECT COALESCE(SUM(pay.amount), 0) FROM payments pay
-         WHERE pay.invoice_id = i.id AND pay.is_deleted = 0) AS paid_amount
-       FROM invoices i
-       LEFT JOIN clients c ON i.client_id = c.id
-       LEFT JOIN companies comp ON i.company_id = comp.id
-       LEFT JOIN projects p ON i.project_id = p.id
-       WHERE i.id = ? AND i.is_deleted = 0
-         ${filterCompanyId && !Number.isNaN(filterCompanyId) && filterCompanyId > 0 ? 'AND i.company_id = ?' : ''}`,
-      filterCompanyId && !Number.isNaN(filterCompanyId) && filterCompanyId > 0
-        ? [idNum, filterCompanyId]
-        : [idNum]
-    );
+    let invoices = [];
+    try {
+      [invoices] = await pool.execute(
+        `SELECT i.*,
+         c.company_name AS client_name,
+         comp.name AS company_name,
+         p.project_name,
+         (SELECT COALESCE(SUM(pay.amount), 0) FROM payments pay
+           WHERE pay.invoice_id = i.id AND pay.is_deleted = 0) AS paid_amount
+         FROM invoices i
+         LEFT JOIN clients c ON i.client_id = c.id
+         LEFT JOIN companies comp ON i.company_id = comp.id
+         LEFT JOIN projects p ON i.project_id = p.id
+         WHERE i.id = ? AND i.is_deleted = 0
+           ${filterCompanyId && !Number.isNaN(filterCompanyId) && filterCompanyId > 0 ? 'AND i.company_id = ?' : ''}`,
+        filterCompanyId && !Number.isNaN(filterCompanyId) && filterCompanyId > 0
+          ? [idNum, filterCompanyId]
+          : [idNum]
+      );
+    } catch (e) {
+      console.warn('⚠️ Primary getById query failed:', e.message);
+    }
+
+    if (!Array.isArray(invoices) || invoices.length === 0) {
+      try {
+        const [simple] = await pool.execute(
+          `SELECT * FROM invoices WHERE id = ? ${filterCompanyId && !Number.isNaN(filterCompanyId) && filterCompanyId > 0 ? 'AND company_id = ?' : ''}`,
+          filterCompanyId && !Number.isNaN(filterCompanyId) && filterCompanyId > 0 ? [idNum, filterCompanyId] : [idNum]
+        );
+        invoices = simple;
+      } catch (e2) {
+        console.error('❌ All getById fallbacks failed:', e2.message);
+        throw e2;
+      }
+    }
 
     if (invoices.length === 0) {
       return res.status(404).json({
