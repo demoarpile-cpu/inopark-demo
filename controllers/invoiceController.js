@@ -176,13 +176,13 @@ const getAll = async (req, res) => {
       params.push(searchPattern, searchPattern);
     }
 
-    // Date range filter
+    // Date range (use invoice_date — bill_date may not exist on all DBs)
     if (start_date) {
-      whereClause += ' AND DATE(i.bill_date) >= ?';
+      whereClause += ' AND DATE(i.invoice_date) >= ?';
       params.push(start_date);
     }
     if (end_date) {
-      whereClause += ' AND DATE(i.bill_date) <= ?';
+      whereClause += ' AND DATE(i.invoice_date) <= ?';
       params.push(end_date);
     }
 
@@ -272,23 +272,31 @@ const getAll = async (req, res) => {
  */
 const getById = async (req, res) => {
   try {
-    const { id } = req.params;
-    const filterCompanyId = req.query.company_id || req.companyId;
+    const idNum = parseInt(String(req.params.id), 10);
+    if (Number.isNaN(idNum) || idNum <= 0) {
+      return res.status(400).json({ success: false, error: 'Invalid invoice id' });
+    }
+    const rawCid = req.query.company_id ?? req.companyId;
+    const filterCompanyId =
+      rawCid != null && rawCid !== '' ? parseInt(String(rawCid), 10) : null;
 
+    // Same paid_amount pattern as getAll (no GROUP BY — avoids pool swallowing SQL errors / empty results)
     const [invoices] = await pool.execute(
-      `SELECT i.*, 
-       c.company_name as client_name, 
-       comp.name as company_name, 
+      `SELECT i.*,
+       c.company_name AS client_name,
+       comp.name AS company_name,
        p.project_name,
-       COALESCE(SUM(pay.amount), 0) as paid_amount
+       (SELECT COALESCE(SUM(pay.amount), 0) FROM payments pay
+         WHERE pay.invoice_id = i.id AND pay.is_deleted = 0) AS paid_amount
        FROM invoices i
        LEFT JOIN clients c ON i.client_id = c.id
        LEFT JOIN companies comp ON i.company_id = comp.id
        LEFT JOIN projects p ON i.project_id = p.id
-       LEFT JOIN payments pay ON pay.invoice_id = i.id AND pay.is_deleted = 0
        WHERE i.id = ? AND i.is_deleted = 0
-       GROUP BY i.id`,
-      [id]
+         ${filterCompanyId && !Number.isNaN(filterCompanyId) && filterCompanyId > 0 ? 'AND i.company_id = ?' : ''}`,
+      filterCompanyId && !Number.isNaN(filterCompanyId) && filterCompanyId > 0
+        ? [idNum, filterCompanyId]
+        : [idNum]
     );
 
     if (invoices.length === 0) {
