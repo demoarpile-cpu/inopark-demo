@@ -28,8 +28,15 @@ const migrationService = {
 
     fixInvoicesTable: async () => {
         try {
-            console.log('🛠️ Altering invoices.client_id to be nullable...');
+            console.log('🛠️ Fixing invoices table columns...');
+            // Make client_id nullable
             await pool.execute(`ALTER TABLE invoices MODIFY COLUMN client_id INT NULL DEFAULT NULL`);
+            
+            // Fix billing_frequency truncation issues (common if it was a small ENUM or VARCHAR)
+            await pool.execute(`ALTER TABLE invoices MODIFY COLUMN billing_frequency VARCHAR(50) DEFAULT NULL`);
+            
+            // Fix discount_type (sometimes limited to '%' or 'fixed')
+            await pool.execute(`ALTER TABLE invoices MODIFY COLUMN discount_type VARCHAR(20) DEFAULT '%'`);
         } catch (error) {
             console.warn(`⚠️ Could not fix invoices table: ${error.message}`);
         }
