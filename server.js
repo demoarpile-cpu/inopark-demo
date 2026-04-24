@@ -231,6 +231,10 @@ process.on('uncaughtException', (err) => {
   // Don't exit immediately, log and continue
 });
 
+// Import and run migrations
+const migrationService = require('./services/migrationService');
+migrationService.run().catch(err => console.error('Migration startup error:', err));
+
 const server = app.listen(PORT, () => {
   console.log(`🚀 Worksuite CRM Backend Server running on port ${PORT}`);
   console.log(`📡 API Base URL: http://localhost:${PORT}${apiBase}`);

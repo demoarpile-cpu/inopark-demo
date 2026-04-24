@@ -189,7 +189,7 @@ const getAll = async (req, res) => {
 
 const create = async (req, res) => {
   try {
-    const { title, description, due_date, priority, assigned_to, reminder_datetime, related_to_type, related_to_id, category, project_id } = req.body;
+    const { title, description, due_date, priority, assigned_to, reminder_datetime, related_to_type, related_to_id, category, project_id, code } = req.body;
     const rawCo = req.body.company_id ?? req.query.company_id ?? req.user?.company_id ?? 1;
     const companyId = (() => {
       const n = parseInt(String(rawCo), 10);
@@ -202,8 +202,8 @@ const create = async (req, res) => {
     }
 
     const [result] = await pool.execute(
-      `INSERT INTO tasks (company_id, title, description, due_date, priority, assigned_to, reminder_datetime, related_to_type, related_to_id, category, project_id, created_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO tasks (company_id, title, description, due_date, priority, assigned_to, reminder_datetime, related_to_type, related_to_id, category, project_id, created_by, code)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         companyId,
         title,
@@ -216,7 +216,8 @@ const create = async (req, res) => {
         related_to_id || null,
         category || 'CRM',
         project_id || null,
-        createdBy
+        createdBy,
+        code || null
       ]
     );
 
@@ -243,7 +244,7 @@ const update = async (req, res) => {
       return res.status(403).json({ success: false, error: req.t ? req.t('api_msg_4e77f18d') : "Permission denied. You can only update your own tasks." });
     }
 
-    const allowed = ['title', 'description', 'due_date', 'priority', 'status', 'assigned_to', 'reminder_datetime', 'related_to_type', 'related_to_id', 'category', 'project_id'];
+    const allowed = ['title', 'description', 'due_date', 'priority', 'status', 'assigned_to', 'reminder_datetime', 'related_to_type', 'related_to_id', 'category', 'project_id', 'code'];
     const fields = [];
     const values = [];
 
