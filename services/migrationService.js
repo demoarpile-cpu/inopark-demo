@@ -11,7 +11,10 @@ const migrationService = {
             // 1. Fix tasks table
             await migrationService.fixTasksTable();
             
-            // 2. Fix other tables (add is_deleted and company_id if missing)
+            // 2. Fix invoices table
+            await migrationService.fixInvoicesTable();
+            
+            // 3. Fix other tables (add is_deleted and company_id if missing)
             const tablesToFix = ['invoices', 'tasks', 'invoice_items', 'credit_notes', 'payments', 'activities'];
             for (const table of tablesToFix) {
                 await migrationService.ensureStandardColumns(table);
@@ -20,6 +23,15 @@ const migrationService = {
             console.log('✅ Auto-migrations completed successfully!');
         } catch (error) {
             console.error('❌ Migration error:', error.message);
+        }
+    },
+
+    fixInvoicesTable: async () => {
+        try {
+            console.log('🛠️ Altering invoices.client_id to be nullable...');
+            await pool.execute(`ALTER TABLE invoices MODIFY COLUMN client_id INT NULL DEFAULT NULL`);
+        } catch (error) {
+            console.warn(`⚠️ Could not fix invoices table: ${error.message}`);
         }
     },
 
