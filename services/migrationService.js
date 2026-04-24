@@ -31,11 +31,11 @@ const migrationService = {
             if (columns.length > 0) {
                 // Column exists, make it nullable or give default
                 console.log('🛠️ Altering tasks.code to be nullable...');
-                await pool.execute(`ALTER TABLE tasks MODIFY COLUMN code VARCHAR(20) DEFAULT NULL`);
+                await pool.execute(`ALTER TABLE tasks MODIFY COLUMN code VARCHAR(255) NULL DEFAULT NULL`);
             } else {
                 // Column missing, add it as nullable
                 console.log('🛠️ Adding tasks.code column...');
-                await pool.execute(`ALTER TABLE tasks ADD COLUMN code VARCHAR(20) DEFAULT NULL AFTER id`);
+                await pool.execute(`ALTER TABLE tasks ADD COLUMN code VARCHAR(255) NULL DEFAULT NULL AFTER id`);
             }
         } catch (error) {
             console.warn(`⚠️ Could not fix tasks table: ${error.message}`);

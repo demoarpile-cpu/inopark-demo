@@ -187,6 +187,28 @@ const getAll = async (req, res) => {
 };
 
 
+/**
+ * Generate unique task code
+ */
+const generateTaskCode = async (companyId) => {
+  try {
+    const [result] = await pool.execute(
+      `SELECT code FROM tasks WHERE company_id = ? ORDER BY id DESC LIMIT 1`,
+      [companyId]
+    );
+    let nextNum = 1;
+    if (result.length > 0 && result[0].code) {
+      const match = result[0].code.match(/TSK-?(\d+)/i);
+      if (match && match[1]) {
+        nextNum = parseInt(match[1], 10) + 1;
+      }
+    }
+    return `TSK-${String(nextNum).padStart(4, '0')}`;
+  } catch (error) {
+    return `TSK-${Date.now().toString().slice(-6)}`;
+  }
+};
+
 const create = async (req, res) => {
   try {
     const { title, description, due_date, priority, assigned_to, reminder_datetime, related_to_type, related_to_id, category, project_id, code } = req.body;
@@ -200,6 +222,9 @@ const create = async (req, res) => {
     if (!title || !due_date || !assigned_to) {
       return res.status(400).json({ success: false, error: req.t ? req.t('api_msg_b98598be') : "Title, Due Date, and Assigned User are required" });
     }
+
+    // Generate code if not provided
+    const taskCode = code || await generateTaskCode(companyId);
 
     const [result] = await pool.execute(
       `INSERT INTO tasks (company_id, title, description, due_date, priority, assigned_to, reminder_datetime, related_to_type, related_to_id, category, project_id, created_by, code)
@@ -217,7 +242,7 @@ const create = async (req, res) => {
         category || 'CRM',
         project_id || null,
         createdBy,
-        code || null
+        taskCode
       ]
     );
 
