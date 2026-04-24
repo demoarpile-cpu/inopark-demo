@@ -26,14 +26,19 @@ const ensureTableExists = async () => {
         INDEX idx_status (status)
       )
     `);
-    
-    // Try to add user_id column if missing
-    try {
-      await pool.execute(`ALTER TABLE leave_requests ADD COLUMN user_id INT AFTER company_id`);
-    } catch (e) {
-      // Column already exists, ignore
+
+    // Add user_id only for legacy DBs. Blind ALTER causes MySQL to error; db.js logs every
+    // execute() failure (and does not rethrow), so try/catch here never silences the log.
+    const [colCheck] = await pool.execute(
+      `SELECT COUNT(*) AS c FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'leave_requests' AND COLUMN_NAME = 'user_id'`
+    );
+    if (Number(colCheck[0]?.c) === 0) {
+      await pool.execute(
+        `ALTER TABLE leave_requests ADD COLUMN user_id INT NULL AFTER company_id`
+      );
     }
-    
+
   } catch (error) {
     console.error('Error ensuring leave_requests table exists:', error);
   }
