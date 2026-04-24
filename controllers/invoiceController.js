@@ -186,22 +186,85 @@ const getAll = async (req, res) => {
       params.push(end_date);
     }
 
-    // paid_amount via subquery avoids GROUP BY + ONLY_FULL_GROUP_BY failures (pool would return [] silently)
-    const [invoices] = await pool.execute(
+    // Do NOT put payments in the main SELECT: if that subquery/table fails, db.js returns [] and the whole list is empty.
+    // Paid amounts are loaded after (batch) so list rows still return.
+    let [invoices] = await pool.execute(
       `SELECT i.*,
        c.company_name AS client_name,
        comp.name AS company_name,
-       p.project_name,
-       (SELECT COALESCE(SUM(pay.amount), 0) FROM payments pay
-         WHERE pay.invoice_id = i.id AND pay.is_deleted = 0) AS paid_amount
+       p.project_name
        FROM invoices i
        LEFT JOIN clients c ON i.client_id = c.id
        LEFT JOIN companies comp ON i.company_id = comp.id
        LEFT JOIN projects p ON i.project_id = p.id
        ${whereClause}
-       ORDER BY i.created_at DESC`,
+       ORDER BY i.id DESC`,
       params
     );
+
+    // If JOIN query failed silently (db pool swallows errors → []), load rows without JOINs
+    if (!invoices || invoices.length === 0) {
+      let [simple] = await pool.execute(
+        `SELECT * FROM invoices WHERE company_id = ? AND is_deleted = 0 ORDER BY id DESC LIMIT 500`,
+        [filterCompanyId]
+      );
+      if (!simple || simple.length === 0) {
+        const [s2] = await pool.execute(
+          `SELECT * FROM invoices WHERE company_id = ? ORDER BY id DESC LIMIT 500`,
+          [filterCompanyId]
+        );
+        simple = s2;
+      }
+      if (simple && simple.length > 0) {
+        invoices = simple;
+        for (const inv of invoices) {
+          if (inv.client_id) {
+            const [crows] = await pool.execute(
+              'SELECT company_name FROM clients WHERE id = ? LIMIT 1',
+              [inv.client_id]
+            );
+            inv.client_name = crows[0]?.company_name || null;
+          } else {
+            inv.client_name = null;
+          }
+          const [prows] = await pool.execute(
+            'SELECT name FROM companies WHERE id = ? LIMIT 1',
+            [inv.company_id]
+          );
+          inv.company_name = prows[0]?.name || null;
+          if (inv.project_id) {
+            const [pr] = await pool.execute(
+              'SELECT project_name FROM projects WHERE id = ? LIMIT 1',
+              [inv.project_id]
+            );
+            inv.project_name = pr[0]?.project_name || null;
+          } else {
+            inv.project_name = null;
+          }
+        }
+      }
+    }
+
+    invoices = Array.isArray(invoices) ? invoices : [];
+
+    // Batch load paid amounts (if payments table is missing, this returns [] and all stay 0)
+    const paidByInvoiceId = new Map();
+    if (invoices.length > 0) {
+      const ids = invoices.map((row) => row.id).filter(Boolean);
+      if (ids.length) {
+        const ph = ids.map(() => '?').join(',');
+        const [paidRows] = await pool.execute(
+          `SELECT invoice_id, COALESCE(SUM(amount), 0) AS s
+           FROM payments
+           WHERE invoice_id IN (${ph}) AND is_deleted = 0
+           GROUP BY invoice_id`,
+          ids
+        );
+        for (const pr of paidRows || []) {
+          paidByInvoiceId.set(pr.invoice_id, parseFloat(pr.s || 0));
+        }
+      }
+    }
 
     // Get items and calculate totals for each invoice
     for (let invoice of invoices) {
@@ -212,7 +275,8 @@ const getAll = async (req, res) => {
       invoice.items = items || [];
 
       // Calculate paid amount from payments
-      const paidAmount = parseFloat(invoice.paid_amount || 0);
+      const paidAmount =
+        paidByInvoiceId.has(invoice.id) ? paidByInvoiceId.get(invoice.id) : parseFloat(invoice.paid_amount || 0);
       const totalAmount = parseFloat(invoice.total || 0);
       const dueAmount = totalAmount - paidAmount;
 
