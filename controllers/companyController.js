@@ -286,10 +286,13 @@ const create = async (req, res) => {
       if (!companyIdFromToken) {
         return res.status(400).json({ success: false, error: "company_id is required for non-superadmins" });
       }
+
+      const ownerId = req.userId || req.body.user_id || 1;
+
       [result] = await pool.execute(
-        `INSERT INTO clients (company_name, industry, email, phone_number, website, address, city, state, country, status, company_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [name, industry ?? null, email ?? null, phone ?? null, website ?? null, address ?? null, city ?? null, state ?? null, country ?? 'United States', 'Active', companyIdFromToken]
+        `INSERT INTO clients (company_name, industry, email, phone_number, website, address, city, state, country, status, company_id, owner_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [name, industry ?? null, email ?? null, phone ?? null, website ?? null, address ?? null, city ?? null, state ?? null, country ?? 'United States', 'Active', companyIdFromToken, ownerId]
       );
     }
 
