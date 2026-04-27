@@ -235,7 +235,7 @@ const create = async (req, res) => {
         description || null,
         due_date,
         priority || 'Medium',
-        assigned_to,
+        (assigned_to && assigned_to !== '') ? assigned_to : null,
         reminder_datetime || null,
         related_to_type || null,
         related_to_id || null,

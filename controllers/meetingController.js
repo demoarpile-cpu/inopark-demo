@@ -70,7 +70,20 @@ const create = async (req, res) => {
         const [result] = await pool.execute(
             `INSERT INTO meetings (company_id, title, description, meeting_date, start_time, end_time, location, assigned_to, reminder_datetime, related_to_type, related_to_id, created_by)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [companyId, title, description, meeting_date, start_time, end_time, location, assigned_to, reminder_datetime, related_to_type, related_to_id, createdBy]
+            [
+                companyId,
+                title,
+                description || null,
+                meeting_date,
+                start_time,
+                end_time,
+                location || null,
+                (assigned_to && assigned_to !== '') ? assigned_to : null,
+                reminder_datetime || null,
+                related_to_type || null,
+                related_to_id || null,
+                createdBy
+            ]
         );
 
         const newMeetingId = result.insertId;

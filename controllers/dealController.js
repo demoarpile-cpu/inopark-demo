@@ -404,8 +404,8 @@ const create = async (req, res) => {
                 tax ?? null, second_tax ?? null, discount ?? 0, discount_type || '%',
                 totals.sub_total, totals.discount_amount, totals.tax_amount, totals.total,
                 createdBy, normalizeDealStatus(status),
-                pipeline_id ?? null, stage_id ?? null,
-                assigned_to ?? null
+                pipeline_id || null, stage_id || null,
+                (assigned_to && assigned_to !== '') ? assigned_to : null
             ]
         );
 
