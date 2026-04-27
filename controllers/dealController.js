@@ -405,7 +405,14 @@ const create = async (req, res) => {
                 totals.sub_total, totals.discount_amount, totals.tax_amount, totals.total,
                 createdBy, normalizeDealStatus(status),
                 pipeline_id || null, stage_id || null,
-                (assigned_to && assigned_to !== '') ? assigned_to : null
+                (() => {
+                    let val = assigned_to;
+                    if (Array.isArray(val)) val = val[0];
+                    else if (typeof val === 'string' && val.startsWith('[') && val.endsWith(']')) {
+                        try { const p = JSON.parse(val); if (Array.isArray(p)) val = p[0]; } catch(e) { val = val.replace(/[\[\]]/g, ''); }
+                    }
+                    return (val && val !== '') ? val : null;
+                })()
             ]
         );
 
@@ -474,8 +481,16 @@ const update = async (req, res) => {
             const values = [];
             for (const [key, val] of Object.entries(fields)) {
                 if (val !== undefined && ALLOWED_DEAL_COLUMNS.has(key)) {
+                    let finalVal = val;
+                    if (key === 'assigned_to') {
+                        if (Array.isArray(finalVal)) finalVal = finalVal[0];
+                        else if (typeof finalVal === 'string' && finalVal.startsWith('[') && finalVal.endsWith(']')) {
+                            try { const p = JSON.parse(finalVal); if (Array.isArray(p)) finalVal = p[0]; } catch(e) { finalVal = finalVal.replace(/[\[\]]/g, ''); }
+                        }
+                        finalVal = (finalVal && finalVal !== '') ? finalVal : null;
+                    }
                     updates.push(`${key} = ?`);
-                    values.push(key === 'status' ? normalizeDealStatus(val) : val);
+                    values.push(key === 'status' ? normalizeDealStatus(finalVal) : finalVal);
                 }
             }
             if (updates.length > 0) {

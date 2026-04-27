@@ -230,7 +230,14 @@ const createWithExtras = async (req, res) => {
             [
                 type, title && title !== '' ? title : null, description && description !== '' ? description : null, reference_type, reference_id,
                 lead_id, company_id, contact_id, deal_id,
-                created_by, (assigned_to && assigned_to !== '') ? assigned_to : null, pinned, (follow_up_at && follow_up_at !== '') ? follow_up_at : null,
+                created_by, (() => {
+                    let val = assigned_to;
+                    if (Array.isArray(val)) val = val[0];
+                    else if (typeof val === 'string' && val.startsWith('[') && val.endsWith(']')) {
+                        try { const p = JSON.parse(val); if (Array.isArray(p)) val = p[0]; } catch(e) { val = val.replace(/[\[\]]/g, ''); }
+                    }
+                    return (val && val !== '') ? val : null;
+                })(), pinned, (follow_up_at && follow_up_at !== '') ? follow_up_at : null,
                 (deadline && deadline !== '') ? deadline : null, (meeting_date && meeting_date !== '') ? meeting_date : null, (meeting_time && meeting_time !== '') ? meeting_time : null, (participants && participants !== '') ? participants : null, (meeting_link && meeting_link !== '') ? meeting_link : null
             ]
         );
@@ -282,7 +289,14 @@ const update = async (req, res) => {
             [
                 description && description !== '' ? description : null,
                 title && title !== '' ? title : null,
-                (assigned_to && assigned_to !== '') ? assigned_to : null,
+                (() => {
+                    let val = assigned_to;
+                    if (Array.isArray(val)) val = val[0];
+                    else if (typeof val === 'string' && val.startsWith('[') && val.endsWith(']')) {
+                        try { const p = JSON.parse(val); if (Array.isArray(p)) val = p[0]; } catch(e) { val = val.replace(/[\[\]]/g, ''); }
+                    }
+                    return (val && val !== '') ? val : null;
+                })(),
                 (deadline && deadline !== '') ? deadline : null,
                 (meeting_date && meeting_date !== '') ? meeting_date : null,
                 (meeting_time && meeting_time !== '') ? meeting_time : null,
