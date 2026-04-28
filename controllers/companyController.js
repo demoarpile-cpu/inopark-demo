@@ -178,6 +178,30 @@ const getById = async (req, res) => {
     const companyId = req.companyId || req.query.company_id || null; // From JWT auth
 
     if (userRole !== 'SUPERADMIN') {
+      // Check if the requested ID is the user's own company ID.
+      // If it is, we return the tenant company record from the 'companies' table.
+      if (String(id) === String(companyId)) {
+        const [companies] = await pool.execute(
+          `SELECT * FROM companies WHERE id = ? AND is_deleted = 0`,
+          [id]
+        );
+
+        if (companies.length > 0) {
+          const company = companies[0];
+          if (!company.logo) {
+            company.logo = await settingsService.getSetting('company_logo', null);
+          }
+          // Get custom fields using service
+          company.custom_fields = await customFieldService.getCustomFieldsWithValues(company.id, 'Companies', company.id);
+
+          return res.json({
+            success: true,
+            data: company
+          });
+        }
+      }
+
+      // If it's not the user's own company, we search in the 'clients' table (Customer Organizations)
       const [clients] = await pool.execute(
         `SELECT id, company_name as name, industry, email, phone_number as phone, website, address, city, state, zip, country, 
                 status, created_at, updated_at, is_deleted, company_id
@@ -303,9 +327,11 @@ const create = async (req, res) => {
         : `SELECT id, company_name as name, industry, email, phone_number as phone, website, address, city, state, country, status FROM clients WHERE id = ?`,
       [companyId]
     );
-    // Save custom fields using service
-    // If this is a SuperAdmin creating a company, module is 'Companies'
-    await customFieldService.saveCustomFields(companyId, 'Companies', companyId, custom_fields);
+    const moduleId = (userRole === 'SUPERADMIN') ? 'Companies' : 'Clients';
+    const recordId = companyId;
+    const companyIdToUse = (userRole === 'SUPERADMIN') ? companyId : companyIdFromToken;
+    
+    await customFieldService.saveCustomFields(companyIdToUse, moduleId, recordId, custom_fields);
 
     res.status(201).json({
       success: true,

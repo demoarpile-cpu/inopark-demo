@@ -11,18 +11,15 @@ const getAll = async (req, res) => {
         let whereClause = 'WHERE a.is_deleted = 0';
         const params = [];
 
-        if (company_id) {
-            whereClause += ' AND a.company_id = ?';
-            params.push(company_id);
-        } else if (contact_id) {
-            whereClause += ' AND a.contact_id = ?';
-            params.push(contact_id);
-        } else if (deal_id) {
-            whereClause += ' AND a.deal_id = ?';
-            params.push(deal_id);
-        } else if (lead_id) {
-            whereClause += ' AND a.lead_id = ?';
-            params.push(lead_id);
+        if (company_id || contact_id || deal_id || lead_id) {
+            whereClause += ' AND (';
+            const subConditions = [];
+            if (company_id) { subConditions.push('a.company_id = ?'); params.push(company_id); }
+            if (contact_id) { subConditions.push('a.contact_id = ?'); params.push(contact_id); }
+            if (deal_id) { subConditions.push('a.deal_id = ?'); params.push(deal_id); }
+            if (lead_id) { subConditions.push('a.lead_id = ?'); params.push(lead_id); }
+            whereClause += subConditions.join(' OR ');
+            whereClause += ')';
         } else if (reference_type && reference_id) {
             whereClause += ' AND a.reference_type = ? AND a.reference_id = ?';
             params.push(reference_type, reference_id);
@@ -339,10 +336,39 @@ const togglePin = async (req, res) => {
     }
 };
 
+/**
+ * Delete (soft delete) activity: DELETE /api/v1/activities/:id
+ */
+const remove = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const [result] = await pool.execute(
+            'UPDATE activities SET is_deleted = 1 WHERE id = ?',
+            [id]
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                error: req.t ? req.t('api_msg_b58b3e72') : "Activity not found" 
+            });
+        }
+
+        res.json({ success: true, message: "Activity deleted successfully" });
+    } catch (error) {
+        console.error('Delete activity error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: req.t ? req.t('api_msg_70743b0d') : "Failed to delete activity" 
+        });
+    }
+};
+
 module.exports = {
     getAll,
     create: createWithExtras,
     createLegacy: create,
     update,
-    togglePin
+    togglePin,
+    remove
 };
