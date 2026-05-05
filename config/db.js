@@ -11,16 +11,21 @@ let originalExecute;
 let originalQuery;
 
 const createDbConfig = () => {
-  // Railway sets MYSQL_URL or individual vars: MYSQLHOST, MYSQLUSER, etc.
-  // Also supports standard DB_HOST, DB_USER, DB_PASS, DB_NAME, DB_PORT
-  
-  // Check for Railway-style MySQL URL first
+  const commonPoolSettings = {
+    waitForConnections: true,
+    connectionLimit: 10,
+    maxIdle: 10, // max idle connections, the default is the same as `connectionLimit`
+    idleTimeout: 60000, // idle connections timeout, in milliseconds, the default value 60000
+    queueLimit: 0,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 10000
+  };
+
   if (process.env.MYSQL_URL || process.env.DATABASE_URL) {
     const dbUrl = process.env.MYSQL_URL || process.env.DATABASE_URL;
-    return { connectionString: dbUrl, waitForConnections: true, connectionLimit: 10 };
+    return { uri: dbUrl, ...commonPoolSettings };
   }
 
-  // Railway MySQL plugin environment variable names
   const host = process.env.MYSQLHOST || process.env.DB_HOST || process.env.MYSQL_HOST || '127.0.0.1';
   const user = process.env.MYSQLUSER || process.env.DB_USER || process.env.MYSQL_USER || 'root';
   const password = process.env.MYSQLPASSWORD || process.env.DB_PASS || process.env.DB_PASSWORD || process.env.MYSQL_PASSWORD || '';
@@ -35,10 +40,7 @@ const createDbConfig = () => {
     password,
     database,
     port,
-    waitForConnections: true,
-    connectionLimit: 10,
-    enableKeepAlive: true,
-    keepAliveInitialDelay: 0
+    ...commonPoolSettings
   };
 };
 
@@ -101,6 +103,9 @@ runStart();
 pool = {
   execute: async (sql, params = []) => {
     if (!originalExecute) await initPool();
+    if (!originalExecute) {
+      throw new Error('Database execute unavailable: connection not initialized');
+    }
 
     const modifiedParams = Array.isArray(params) ? [...params] : [params];
 
@@ -115,6 +120,9 @@ pool = {
   },
   query: async (sql, params = []) => {
     if (!originalQuery) await initPool();
+    if (!originalQuery) {
+      throw new Error('Database query unavailable: connection not initialized');
+    }
 
     const modifiedParams = Array.isArray(params) ? [...params] : [params];
 

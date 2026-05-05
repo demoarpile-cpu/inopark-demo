@@ -3,6 +3,23 @@
 // =====================================================
 
 const pool = require('../config/db');
+
+/** deals.assigned_to references users.id */
+const normalizeDealAssignee = (val) => {
+    if (val === undefined || val === null || val === '') return null;
+    let v = val;
+    if (Array.isArray(v)) v = v[0];
+    else if (typeof v === 'string' && v.startsWith('[') && v.endsWith(']')) {
+        try {
+            const p = JSON.parse(v);
+            if (Array.isArray(p)) v = p[0];
+        } catch (e) {
+            v = v.replace(/[\[\]]/g, '');
+        }
+    }
+    const n = parseInt(String(v).trim(), 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+};
 const customFieldService = require('../services/customFieldService');
 
 /**
@@ -399,20 +416,16 @@ const create = async (req, res) => {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 companyId, deal_number, deal_date ?? null, valid_till ?? null, currency || 'USD',
-                client_id ?? null, project_id ?? null, lead_id ?? null, title ?? null,
+                (client_id && client_id !== '') ? client_id : null,
+                (project_id && project_id !== '') ? project_id : null,
+                (lead_id && lead_id !== '') ? lead_id : null,
+                title ?? null,
                 calculate_tax || 'After Discount', description ?? null, note ?? null, terms || 'Thank you for your business.',
                 tax ?? null, second_tax ?? null, discount ?? 0, discount_type || '%',
                 totals.sub_total, totals.discount_amount, totals.tax_amount, totals.total,
                 createdBy, normalizeDealStatus(status),
                 pipeline_id || null, stage_id || null,
-                (() => {
-                    let val = assigned_to;
-                    if (Array.isArray(val)) val = val[0];
-                    else if (typeof val === 'string' && val.startsWith('[') && val.endsWith(']')) {
-                        try { const p = JSON.parse(val); if (Array.isArray(p)) val = p[0]; } catch(e) { val = val.replace(/[\[\]]/g, ''); }
-                    }
-                    return (val && val !== '') ? val : null;
-                })()
+                normalizeDealAssignee(assigned_to)
             ]
         );
 
@@ -483,11 +496,13 @@ const update = async (req, res) => {
                 if (val !== undefined && ALLOWED_DEAL_COLUMNS.has(key)) {
                     let finalVal = val;
                     if (key === 'assigned_to') {
-                        if (Array.isArray(finalVal)) finalVal = finalVal[0];
-                        else if (typeof finalVal === 'string' && finalVal.startsWith('[') && finalVal.endsWith(']')) {
-                            try { const p = JSON.parse(finalVal); if (Array.isArray(p)) finalVal = p[0]; } catch(e) { finalVal = finalVal.replace(/[\[\]]/g, ''); }
-                        }
-                        finalVal = (finalVal && finalVal !== '') ? finalVal : null;
+                        finalVal = normalizeDealAssignee(finalVal);
+                    }
+
+                    // Handle empty strings for ID/integer fields
+                    const idFields = ['client_id', 'project_id', 'lead_id', 'pipeline_id', 'stage_id', 'created_by', 'company_id', 'assigned_to'];
+                    if (idFields.includes(key) && finalVal === '') {
+                        finalVal = null;
                     }
                     updates.push(`${key} = ?`);
                     values.push(key === 'status' ? normalizeDealStatus(finalVal) : finalVal);

@@ -160,7 +160,7 @@ const sanitizeLead = (lead) => {
 
 const getAll = async (req, res) => {
   try {
-    const { status, owner_id, source, city } = req.query;
+    const { status, owner_id, source, city, search } = req.query;
     // Use company_id from auth token (req.companyId) or query param
     const companyId = req.companyId || req.query.company_id || null;
     console.log('🔍 FETCH LEADS DEBUG:');
@@ -195,6 +195,17 @@ const getAll = async (req, res) => {
       params.push(city);
     }
 
+    const searchTrim = search != null && String(search).trim() ? String(search).trim() : '';
+    if (searchTrim) {
+      const pattern = `%${searchTrim}%`;
+      whereClause += ` AND (
+        l.person_name LIKE ? OR IFNULL(l.company_name,'') LIKE ? OR l.email LIKE ?
+        OR l.phone LIKE ? OR IFNULL(l.city,'') LIKE ? OR IFNULL(l.source,'') LIKE ?
+        OR IFNULL(l.notes,'') LIKE ? OR IFNULL(u.name,'') LIKE ?
+      )`;
+      params.push(pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern);
+    }
+
     // Get all leads without pagination
     const [leads] = await pool.execute(
       `SELECT l.*, 
@@ -216,11 +227,20 @@ const getAll = async (req, res) => {
 
     // Permanent Dummy Fallback: If DB is empty, show beautiful demo leads
     if (leads.length === 0) {
-      const demoLeads = [
+      let demoLeads = [
         { id: 101, person_name: "Aryan Sharma", company_name: "TechNova Solutions", email: "aryan@technova.com", status: "Qualified", value: "25000", owner_name: "Kavya", stage_name: "Proposal", created_at: new Date() },
         { id: 102, person_name: "Sneha Kapoor", company_name: "Creative Mint", email: "sneha@creativemint.in", status: "New", value: "12000", owner_name: "Devesh", stage_name: "Discovery", created_at: new Date() },
         { id: 103, person_name: "Vikram Malhotra", company_name: "Elite Realty", email: "v.malhotra@eliterealty.com", status: "Won", value: "45000", owner_name: "Kavya", stage_name: "Closed Won", created_at: new Date() }
       ];
+      if (searchTrim) {
+        const q = searchTrim.toLowerCase();
+        demoLeads = demoLeads.filter(
+          (row) =>
+            String(row.person_name || '').toLowerCase().includes(q) ||
+            String(row.company_name || '').toLowerCase().includes(q) ||
+            String(row.email || '').toLowerCase().includes(q)
+        );
+      }
       return res.json({ success: true, data: demoLeads });
     }
 
